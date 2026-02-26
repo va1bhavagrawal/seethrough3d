@@ -1098,8 +1098,6 @@ def main(args):
 			enumerated_dataloader = enumerate(dataloader_iterator, start=skip_steps)
 		else: 
 			enumerated_dataloader = enumerate(train_dataloader) 
-		if epoch == first_epoch: 
-			continue 
 		for step, batch in enumerated_dataloader: 
 			progress_bar.set_description(f"epoch {epoch}, dataset_ids: {batch['index']}") 
 			models_to_accumulate = [transformer]

@@ -1,9 +1,8 @@
 export MODEL_DIR="black-forest-labs/FLUX.1-dev" # your flux path
 export OUTPUT_DIR="/archive/vaibhav.agrawal/a-bev-of-the-latents/easycontrol_cuboids"  # your save path
 export CONFIG="./default_config.yaml"
-export TRAIN_DATA="/archive/vaibhav.agrawal/a-bev-of-the-latents/datasetv7_superhard/cuboids__upto_4subjects.jsonl" # your data jsonl file 
+export TRAIN_DATA="/archive/vaibhav.agrawal/a-bev-of-the-latents/datasetv9/rgb.jsonl" # your data jsonl file 
 export LOG_PATH="$OUTPUT_DIR/log"
-export INFERENCE_EMBEDS_DIR="/archive/vaibhav.agrawal/a-bev-of-the-latents/inference_embeds_datasetv7_superhard"
 
 accelerate launch --config_file $CONFIG train.py \
     --pretrained_model_name_or_path $MODEL_DIR \
@@ -24,4 +23,4 @@ accelerate launch --config_file $CONFIG train.py \
     --train_batch_size=1 \
     --stage1_epochs=1 \
     --stage2_steps=5000 \
-    --checkpointing_steps=2500
+    --checkpointing_steps=5000
