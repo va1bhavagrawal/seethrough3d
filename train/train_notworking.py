@@ -212,147 +212,229 @@ def visualize_training_data(batch, vae, model_input, noisy_model_input, cond_inp
 		global_step: Current training step
 		accelerator: Accelerator instance
 	"""
-
-	has_spatial_condition = cond_input is not None
+	
+	# Check availability of conditions
+	has_spatial_condition = batch["cond_pixel_values"] is not None
 	has_cuboids_segmasks = "cuboids_segmasks" in batch and batch["cuboids_segmasks"] is not None
-
+	has_cuboids_segmasks_bev = "cuboids_segmasks_bev" in batch and batch["cuboids_segmasks_bev"] is not None
+	
+	# Initialize variables
+	spatial_img = None
+	
 	with torch.no_grad():
+		# Get VAE config for proper decoding
 		vae_config_shift_factor = vae.config.shift_factor
 		vae_config_scaling_factor = vae.config.scaling_factor
-		vae_dtype = vae.dtype
-		vae = vae.to(torch.float32)
-
+		vae_dtype = vae.dtype 
+		vae = vae.to(torch.float32) 
+		
 		# Decode spatial condition if available
 		if has_spatial_condition:
 			cond_for_decode = (cond_input / vae_config_scaling_factor) + vae_config_shift_factor
 			spatial_decoded = vae.decode(cond_for_decode.float()).sample
-			spatial_decoded = (spatial_decoded / 2 + 0.5).clamp(0, 1)
+			spatial_decoded = (spatial_decoded / 2 + 0.5).clamp(0, 1)  # Normalize to [0,1]
 			spatial_img = spatial_decoded[0].float().cpu().permute(1, 2, 0).numpy()
-		else:
-			spatial_img = None
-
-		# Decode clean and noisy model inputs
+		
+		# Decode clean model input
 		clean_for_decode = (model_input / vae_config_scaling_factor) + vae_config_shift_factor
 		clean_decoded = vae.decode(clean_for_decode.float()).sample
-		clean_img = (clean_decoded / 2 + 0.5).clamp(0, 1)[0].float().cpu().permute(1, 2, 0).numpy()
-
+		clean_decoded = (clean_decoded / 2 + 0.5).clamp(0, 1)
+		
+		# Decode noisy model input
 		noisy_for_decode = (noisy_model_input / vae_config_scaling_factor) + vae_config_shift_factor
 		noisy_decoded = vae.decode(noisy_for_decode.float()).sample
-		noisy_img = (noisy_decoded / 2 + 0.5).clamp(0, 1)[0].float().cpu().permute(1, 2, 0).numpy()
-
+		noisy_decoded = (noisy_decoded / 2 + 0.5).clamp(0, 1)
+		
+		# Convert to CPU and numpy for visualization (take first batch item)
+		clean_img = clean_decoded[0].float().cpu().permute(1, 2, 0).numpy()
+		noisy_img = noisy_decoded[0].float().cpu().permute(1, 2, 0).numpy()
+		
+		# Get text prompt and other info
 		text_prompt = batch["prompts"][0] if isinstance(batch["prompts"], list) else batch["prompts"]
 		call_id = batch["call_ids"][0] if batch["call_ids"] is not None else "N/A"
-
-		# 3x3 grid layout:
-		# Row 0: Spatial Condition | Clean Model Input | Noisy Model Input
-		# Row 1: Cuboids Segmentation | Segmentation Legend | Text Prompt & Call ID
-		# Row 2: Tensor Shapes | Training Info | (hidden)
-		fig, axes = plt.subplots(3, 3, figsize=(18, 18))
-
-		# --- Row 0: images ---
-		if has_spatial_condition:
+		
+		# Create figure with more subplots to accommodate all entities including BEV
+		fig, axes = plt.subplots(4, 3, figsize=(18, 24))
+		# fig.suptitle(f'Training Data Visualization - Step {global_step}', fontsize=16)
+		
+		# Spatial condition (0,0)
+		if has_spatial_condition and spatial_img is not None:
 			axes[0, 0].imshow(spatial_img)
+			axes[0, 0].set_title('Spatial Condition')
 		else:
-			axes[0, 0].text(0.5, 0.5, 'NOT AVAILABLE',
-							ha='center', va='center', transform=axes[0, 0].transAxes,
-							fontsize=14, fontweight='bold')
-		axes[0, 0].set_title('Spatial Condition')
+			axes[0, 0].text(0.5, 0.5, 'NOT AVAILABLE', 
+						   horizontalalignment='center', verticalalignment='center',
+						   transform=axes[0, 0].transAxes, fontsize=14, fontweight='bold')
+			axes[0, 0].set_title('Spatial Condition')
 		axes[0, 0].axis('off')
-
-		axes[0, 1].imshow(clean_img)
-		axes[0, 1].set_title('Clean Model Input (Target)')
-		axes[0, 1].axis('off')
-
-		axes[0, 2].imshow(noisy_img)
-		axes[0, 2].set_title('Noisy Model Input')
+		
+		# Clean model input (0,2)
+		axes[0, 2].imshow(clean_img)
+		axes[0, 2].set_title('Clean Model Input')
 		axes[0, 2].axis('off')
-
-		# --- Row 1: segmentation ---
+		
+		# Noisy model input (1,0)
+		axes[1, 0].imshow(noisy_img)
+		axes[1, 0].set_title('Noisy Model Input')
+		axes[1, 0].axis('off')
+		
+		# Cuboids segmentation masks with legend (1,1 and 1,2)
 		if has_cuboids_segmasks:
-			segmask = batch["cuboids_segmasks"][0].float().cpu().numpy()  # (n_subjects, h, w)
+			segmask = batch["cuboids_segmasks"][0].float().cpu().numpy()  # Shape: (n_subjects, h, w)
 			n_subjects, h, w = segmask.shape
-			n_show = min(4, n_subjects)
-
-			np.random.seed(42)
-			colors = np.random.rand(n_show + 1, 3)
-			colors[0] = [0, 0, 0]  # background black
-
-			# 2x2 grid of individual subject masks
-			combined_mask = np.zeros((h * 2, w * 2, 3))
-			for idx in range(n_show):
-				row_i, col_i = idx // 2, idx % 2
+			
+			# Only use first 4 subjects for visualization
+			n_subjects_to_show = min(4, n_subjects)
+			
+			# Create colored segmentation visualization
+			np.random.seed(42)  # For consistent colors
+			colors = np.random.rand(n_subjects_to_show + 1, 3)  # +1 for background
+			colors[0] = [0, 0, 0]  # Background is black
+			
+			# Create 2x2 grid of individual subject masks
+			grid_h, grid_w = 2, 2
+			combined_mask = np.zeros((h * grid_h, w * grid_w, 3))
+			
+			for idx in range(n_subjects_to_show):
+				row = idx // grid_w
+				col = idx % grid_w
+				
+				# Create binary mask for this subject
 				subject_mask = np.zeros((h, w, 3))
-				subject_mask[segmask[idx] > 0.5] = colors[idx + 1]
-				combined_mask[row_i*h:(row_i+1)*h, col_i*w:(col_i+1)*w] = subject_mask
-
-			axes[1, 0].imshow(combined_mask)
-			axes[1, 0].set_title(f'Cuboids Segmentation (first {n_show}, 2×2 grid)')
-			axes[1, 0].axis('off')
-
-			# Legend
-			axes[1, 1].set_xlim(0, 1)
-			axes[1, 1].set_ylim(0, 1)
-			y_positions = np.linspace(0.9, 0.1, n_show + 1)
-			axes[1, 1].text(0.1, y_positions[0], 'Background',
-							color='white', fontsize=12, fontweight='bold',
-							bbox=dict(facecolor='black', boxstyle='round,pad=0.2'))
-			for i in range(n_show):
-				axes[1, 1].text(0.1, y_positions[i + 1], f'Object {i}',
-								color=colors[i + 1], fontsize=12, fontweight='bold')
-			axes[1, 1].set_title('Segmentation Legend')
+				mask = segmask[idx] > 0.5  # Binary threshold
+				subject_mask[mask] = colors[idx + 1]
+				
+				# Place in grid
+				combined_mask[row*h:(row+1)*h, col*w:(col+1)*w] = subject_mask
+			
+			axes[1, 1].imshow(combined_mask)
+			axes[1, 1].set_title('Cuboids Segmentation (2x2 Grid)')
 			axes[1, 1].axis('off')
+			
+			# Create legend in the next subplot (1,2) - only for first 4 subjects
+			axes[1, 2].set_xlim(0, 1)
+			axes[1, 2].set_ylim(0, 1)
+			
+			# Add legend entries
+			legend_y_positions = np.linspace(0.9, 0.1, n_subjects_to_show + 1)
+			axes[1, 2].text(0.1, legend_y_positions[0], f"Background", 
+						   color=colors[0], fontsize=12, fontweight='bold')
+			
+			for subject_idx in range(n_subjects_to_show):
+				axes[1, 2].text(0.1, legend_y_positions[subject_idx + 1], 
+							   f"Subject {subject_idx}", 
+							   color=colors[subject_idx + 1], fontsize=12, fontweight='bold')
+			
+			axes[1, 2].set_title('Segmentation Legend (First 4)')
+			axes[1, 2].axis('off')
 		else:
-			for col in range(2):
-				axes[1, col].text(0.5, 0.5, 'NOT AVAILABLE',
-								  ha='center', va='center', transform=axes[1, col].transAxes,
-								  fontsize=14, fontweight='bold')
-				axes[1, col].axis('off')
-			axes[1, 0].set_title('Cuboids Segmentation')
-			axes[1, 1].set_title('Segmentation Legend')
-
-		# Text prompt and call ID
-		axes[1, 2].text(0.5, 0.5, f'Prompt:\n\n"{text_prompt}"\n\nCall ID:\n{call_id}',
-					    ha='center', va='center', transform=axes[1, 2].transAxes,
-					    fontsize=11, wrap=True)
-		axes[1, 2].set_title('Text Prompt & Call ID')
-		axes[1, 2].axis('off')
-
-		# --- Row 2: info ---
-		pixel_info = f'pixel_values:      {tuple(batch["pixel_values"].shape)}\n'
+			axes[1, 1].text(0.5, 0.5, 'NOT AVAILABLE', 
+						   horizontalalignment='center', verticalalignment='center',
+						   transform=axes[1, 1].transAxes, fontsize=14, fontweight='bold')
+			axes[1, 1].set_title('Cuboids Segmentation')
+			axes[1, 1].axis('off')
+			
+			axes[1, 2].text(0.5, 0.5, 'NOT AVAILABLE', 
+						   horizontalalignment='center', verticalalignment='center',
+						   transform=axes[1, 2].transAxes, fontsize=14, fontweight='bold')
+			axes[1, 2].set_title('Segmentation Legend')
+			axes[1, 2].axis('off')
+		
+		# BEV Cuboids segmentation masks with legend (2,0 and 2,1)
+		if has_cuboids_segmasks_bev:
+			segmask_bev = batch["cuboids_segmasks_bev"][0].float().cpu().numpy()  # Shape: (n_subjects, h, w)
+			n_subjects_bev, h_bev, w_bev = segmask_bev.shape
+			
+			# Create colored segmentation visualization for BEV (use different seed for different colors)
+			np.random.seed(123)  # Different seed for BEV colors
+			colors_bev = np.random.rand(n_subjects_bev + 1, 3)  # +1 for background
+			colors_bev[0] = [0, 0, 0]  # Background is black
+			
+			# Create RGB image from BEV segmentation
+			colored_segmask_bev = np.zeros((h_bev, w_bev, 3))
+			for subject_idx in range(n_subjects_bev):
+				mask_bev = segmask_bev[subject_idx] > 0.5  # Binary threshold
+				colored_segmask_bev[mask_bev] = colors_bev[subject_idx + 1]
+			
+			axes[2, 0].imshow(colored_segmask_bev)
+			axes[2, 0].set_title('BEV Cuboids Segmentation')
+			axes[2, 0].axis('off')
+			
+			# Create BEV legend in the next subplot (2,1)
+			axes[2, 1].set_xlim(0, 1)
+			axes[2, 1].set_ylim(0, 1)
+			
+			# Add BEV legend entries
+			legend_y_positions_bev = np.linspace(0.9, 0.1, n_subjects_bev + 1)
+			axes[2, 1].text(0.1, legend_y_positions_bev[0], f"Background", 
+						   color=colors_bev[0], fontsize=12, fontweight='bold')
+			
+			for subject_idx in range(n_subjects_bev):
+				axes[2, 1].text(0.1, legend_y_positions_bev[subject_idx + 1], 
+							   f"Subject {subject_idx}", 
+							   color=colors_bev[subject_idx + 1], fontsize=12, fontweight='bold')
+			
+			axes[2, 1].set_title('BEV Segmentation Legend')
+			axes[2, 1].axis('off')
+		else:
+			axes[2, 0].text(0.5, 0.5, 'NOT AVAILABLE', 
+					   horizontalalignment='center', verticalalignment='center',
+						   transform=axes[2, 0].transAxes, fontsize=14, fontweight='bold')
+			axes[2, 0].set_title('BEV Cuboids Segmentation')
+			axes[2, 0].axis('off')
+		
+			axes[2, 1].text(0.5, 0.5, 'NOT AVAILABLE', 
+						   horizontalalignment='center', verticalalignment='center',
+						   transform=axes[2, 1].transAxes, fontsize=14, fontweight='bold')
+			axes[2, 1].set_title('BEV Segmentation Legend')
+			axes[2, 1].axis('off')
+		
+		# Text prompt and call ID (2,2)
+		axes[2, 2].text(0.5, 0.5, f'Text Prompt:\n\n"{text_prompt}"\n\nCall ID: {call_id}', 
+					   horizontalalignment='center', verticalalignment='center',
+					   transform=axes[2, 2].transAxes, fontsize=12, wrap=True)
+		axes[2, 2].set_title('Text Prompt & Call ID')
+		axes[2, 2].axis('off')
+		
+		# Pixel values info (3,0)
+		pixel_info = f'Pixel Values Shape: {batch["pixel_values"].shape}\n'
 		if has_spatial_condition:
-			pixel_info += f'cond_pixel_values: {tuple(batch["cond_pixel_values"].shape)}\n'
+			pixel_info += f'Spatial Shape: {batch["cond_pixel_values"].shape}\n'
 		if has_cuboids_segmasks:
-			seg = batch["cuboids_segmasks"]
-			pixel_info += f'cuboids_segmasks:  {tuple(seg[0].shape) if hasattr(seg[0], "shape") else len(seg)} items\n'
-
-		axes[2, 0].text(0.5, 0.5, pixel_info,
-					    ha='center', va='center', transform=axes[2, 0].transAxes,
-					    fontsize=10, fontfamily='monospace')
-		axes[2, 0].set_title('Tensor Shapes')
-		axes[2, 0].axis('off')
-
-		training_info = (
-			f'Global Step: {global_step}\n\n'
-			f'Conditions:\n'
-			f'  Spatial:   {"✓" if has_spatial_condition else "✗"}\n'
-			f'  Segmasks:  {"✓" if has_cuboids_segmasks else "✗"}'
-		)
-		axes[2, 1].text(0.5, 0.5, training_info,
-					    ha='center', va='center', transform=axes[2, 1].transAxes,
-					    fontsize=12, fontfamily='monospace')
-		axes[2, 1].set_title('Training Info')
-		axes[2, 1].axis('off')
-
-		axes[2, 2].axis('off')  # unused slot
-
+			pixel_info += f'Cuboids Segmasks: {len(batch["cuboids_segmasks"])}\n'
+		if has_cuboids_segmasks_bev:
+			pixel_info += f'BEV Segmasks: {len(batch["cuboids_segmasks_bev"])}'
+		
+		axes[3, 0].text(0.5, 0.5, pixel_info, 
+					   horizontalalignment='center', verticalalignment='center',
+					   transform=axes[3, 0].transAxes, fontsize=10, fontfamily='monospace')
+		axes[3, 0].set_title('Tensor Shapes')
+		axes[3, 0].axis('off')
+		
+		# Training info (3,1)
+		training_info = f'Global Step: {global_step}\nConditions:\nSpatial: {"✓" if has_spatial_condition else "✗"}\nSubject: {"fuck you"}\nSegmasks: {"✓" if has_cuboids_segmasks else "✗"}\nBEV Segmasks: {"✓" if has_cuboids_segmasks_bev else "✗"}'
+		axes[3, 1].text(0.5, 0.5, training_info, 
+					   horizontalalignment='center', verticalalignment='center',
+					   transform=axes[3, 1].transAxes, fontsize=12, fontfamily='monospace')
+		axes[3, 1].set_title('Training Info')
+		axes[3, 1].axis('off')
+		
+		# Additional info (3,2) - can be used for any extra debugging info
+		axes[3, 2].text(0.5, 0.5, 'Additional Info\n(Reserved)', 
+					   horizontalalignment='center', verticalalignment='center',
+					   transform=axes[3, 2].transAxes, fontsize=12, fontfamily='monospace')
+		axes[3, 2].set_title('Reserved')
+		axes[3, 2].axis('off')
+		
 		plt.tight_layout()
-
+		
+		# Save the visualization
 		save_dir = os.path.join(args.output_dir, "visualizations")
 		os.makedirs(save_dir, exist_ok=True)
 		save_path = os.path.join(save_dir, f"training_vis_step_{global_step}.png")
 		plt.savefig(save_path, dpi=150, bbox_inches='tight')
 		plt.close()
-
+		
 		logger.info(f"Training visualization saved to {save_path}")
 
 		vae = vae.to(vae_dtype)
@@ -474,8 +556,13 @@ def parse_args(input_args=None):
 	parser.add_argument(
 		"--train_batch_size", type=int, default=1, help="Batch size (per device) for the training dataloader."
 	)
-	parser.add_argument("--stage1_epochs", type=int, default=50)
-	parser.add_argument("--stage2_steps", type=int, default=5000)
+	parser.add_argument("--num_train_epochs", type=int, default=50)
+	parser.add_argument(
+		"--max_train_steps",
+		type=int,
+		default=None,
+		help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
+	)
 	parser.add_argument(
 		"--checkpointing_steps",
 		type=int,
@@ -953,35 +1040,20 @@ def main(args):
 	print(f"{shuffled_jsonls = }")
 	assert len(shuffled_jsonls) > 0, f"Make sure that there are shuffled jsonl files in {osp.dirname(args.train_data_dir)}" 
 	train_dataloaders = [] 
-	for epoch in range(args.stage1_epochs): # prepare dataloader for each epoch, irrespective of the resume state  
+	for epoch in range(args.num_train_epochs): # prepare dataloader for each epoch, irrespective of the resume state  
 		shuffled_idx = epoch % len(shuffled_jsonls) 
 		train_data_file = shuffled_jsonls[shuffled_idx] 
 		assert osp.exists(train_data_file), f"Make sure that the train data jsonl file {train_data_file} exists." 
 		args.current_train_data_dir = train_data_file 
-		train_dataset = make_train_dataset(args, tokenizers, accelerator, 512) 
+		train_dataset = make_train_dataset(args, tokenizers, accelerator) 
 		train_dataloader = torch.utils.data.DataLoader(
 			train_dataset,
 			batch_size=args.train_batch_size,
-			shuffle=False, 
+			shuffle=False, # yayy!! reproducible experiments!
 			collate_fn=collate_fn,
 			num_workers=args.dataloader_num_workers,
 		)
 		train_dataloaders.append(train_dataloader) 
-	
-	if args.stage2_steps is not None: 
-		args.current_train_data_dir = shuffled_jsonls[0] 
-		train_dataset_stage2 = make_train_dataset(args, tokenizers, accelerator, 1024, only_realistic_images=True) 
-		n_stage2 = min(args.stage2_steps * args.train_batch_size * args.gradient_accumulation_steps * accelerator.num_processes, len(train_dataset_stage2))
-		print(f"Stage2: subsetting dataset from {len(train_dataset_stage2)} to {n_stage2} examples")
-		train_dataset_stage2 = torch.utils.data.Subset(train_dataset_stage2, list(range(n_stage2)))
-		train_dataloader_stage2 = torch.utils.data.DataLoader(
-			train_dataset_stage2,
-			batch_size=args.train_batch_size,
-			shuffle=False, 
-			collate_fn=collate_fn,
-			num_workers=args.dataloader_num_workers,
-		) 
-		train_dataloaders.append(train_dataloader_stage2) 
 
 	vae_config_shift_factor = vae.config.shift_factor
 	vae_config_scaling_factor = vae.config.scaling_factor
@@ -989,14 +1061,15 @@ def main(args):
 	# Scheduler and math around the number of training steps.
 	overrode_max_train_steps = False
 	num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)  
-	stage1_steps = args.stage1_epochs * num_update_steps_per_epoch
-	overrode_max_train_steps = True
+	if args.max_train_steps is None:
+		args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
+		overrode_max_train_steps = True
 
 	lr_scheduler = get_scheduler(
 		args.lr_scheduler,
 		optimizer=optimizer,
 		num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
-		num_training_steps=stage1_steps * accelerator.num_processes,
+		num_training_steps=args.max_train_steps * accelerator.num_processes,
 		num_cycles=args.lr_num_cycles,
 		power=args.lr_power,
 	)
@@ -1008,10 +1081,14 @@ def main(args):
 		optimizer, lr_scheduler 
 	)
 
+	print(f"before preparation, {len(train_dataloaders[0]) = }") 
+
 	prepared_train_dataloaders = [] 
 	for train_dataloader in train_dataloaders: 
 		prepared_train_dataloaders.append(accelerator.prepare(train_dataloader)) 
 	train_dataloaders = prepared_train_dataloaders 
+
+	print(f"after preparation, {len(train_dataloaders[0]) = }") 
 
 	if args.pretrained_lora_path is not None: 
 		accelerator.load_state(osp.dirname(args.pretrained_lora_path))  
@@ -1027,9 +1104,9 @@ def main(args):
 	# We need to recalculate our total training steps as the size of the training dataloader may have changed.
 	num_update_steps_per_epoch = math.ceil(len(train_dataloaders[0]) / args.gradient_accumulation_steps)
 	if overrode_max_train_steps:
-		stage1_steps = args.stage1_epochs * num_update_steps_per_epoch
+		args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
 	# Afterwards we recalculate our number of training epochs
-	args.stage1_epochs = math.ceil(stage1_steps / num_update_steps_per_epoch)
+	args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
 
 	# We need to initialize the trackers we use, and also store our configuration.
 
@@ -1043,14 +1120,14 @@ def main(args):
 	logger.info("***** Running training *****")
 	logger.info(f"  Num examples = {len(train_dataset)}")
 	logger.info(f"  Num batches each epoch = {len(train_dataloader)}")
-	logger.info(f"  Num Epochs = {args.stage1_epochs}")
+	logger.info(f"  Num Epochs = {args.num_train_epochs}")
 	logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
 	logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
 	logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
-	logger.info(f"  Total optimization steps = {stage1_steps}")
+	logger.info(f"  Total optimization steps = {args.max_train_steps}")
 
 	progress_bar = tqdm(
-		range(0, stage1_steps + args.stage2_steps),
+		range(0, args.max_train_steps),
 		initial=initial_global_step,
 		desc="Steps",
 		# Only show the progress bar once on each machine.
@@ -1072,22 +1149,13 @@ def main(args):
 	vae_scale_factor = 16
 	height_cond = 2 * (args.cond_size // vae_scale_factor)
 	width_cond = 2 * (args.cond_size // vae_scale_factor)        
+	offset = 64
 
 	num_training_visualizations = 10   
 
 	skip_steps = initial_global_step - first_epoch * num_update_steps_per_epoch   
-
-	# Estimate total training steps across all dataloaders
-	total_steps_estimate = sum(
-		math.ceil(len(dl) / args.gradient_accumulation_steps) for dl in train_dataloaders
-	)
-	logger.info(f"Estimated total steps across all dataloaders: {total_steps_estimate}")
-	for i, dl in enumerate(train_dataloaders):
-		steps_i = math.ceil(len(dl) / args.gradient_accumulation_steps)
-		label = f"epoch-{i}" if i < args.stage1_epochs else "stage2"
-		logger.info(f"  {label}: {len(dl)} batches → {steps_i} steps")
-
-	for epoch in range(first_epoch, len(train_dataloaders)):
+	print(f"{skip_steps = }")
+	for epoch in range(first_epoch, args.num_train_epochs):
 		transformer.train()
 		train_dataloader = train_dataloaders[epoch] # use a new dataloader for each epoch  
 		if epoch == first_epoch and skip_steps > 0:
@@ -1098,8 +1166,6 @@ def main(args):
 			enumerated_dataloader = enumerate(dataloader_iterator, start=skip_steps)
 		else: 
 			enumerated_dataloader = enumerate(train_dataloader) 
-		if epoch == first_epoch: 
-			continue 
 		for step, batch in enumerated_dataloader: 
 			progress_bar.set_description(f"epoch {epoch}, dataset_ids: {batch['index']}") 
 			models_to_accumulate = [transformer]
@@ -1107,6 +1173,10 @@ def main(args):
 				
 				if args.inference_embeds_dir is None: 
 					print(f"encoding {batch['prompts'] = }")
+					# prompt_embeds, pooled_prompt_embeds, text_ids = text_encoding_pipeline.encode_prompt(
+					# 	prompt=batch["prompts"], 
+					# 	prompt_2=batch["prompts"], 
+					# )
 					prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
 						text_encoders=[text_encoder_one, text_encoder_two],
 						tokenizers=[tokenizer_one, tokenizer_two], 
@@ -1114,22 +1184,23 @@ def main(args):
 						max_sequence_length=512, 
 						device=accelerator.device, 
 					)
-					# for i, prompt in enumerate(batch["prompts"]): 
-					# 	# prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
-					# 	# 	text_encoders=[text_encoder_one, text_encoder_two],
-					# 	# 	tokenizers=[tokenizer_one, tokenizer_two], 
-					# 	# 	prompt=prompt, 
-					# 	# 	max_sequence_length=512, 
-					# 	# 	device=accelerator.device, 
-					# 	# )
-					# 	print(f"{prompt_embeds.shape = }, {pooled_prompt_embeds.shape = }, {text_ids.shape = }") 
-					# 	# checking if the cached embeddings match 
-					# 	inference_embeds_dir = "/archive/vaibhav.agrawal/a-bev-of-the-latents/inference_embeds_datasetv7_superhard"
-					# 	cached_prompt_path = osp.join(inference_embeds_dir, f"{'_'.join(prompt.lower().split())}.pth") 
-					# 	assert osp.exists(cached_prompt_path), f"Make sure that the cached prompt embedding {cached_prompt_path} exists." 
-					# 	cached_prompt_embeds = torch.load(cached_prompt_path, map_location="cpu") 
-					# 	assert torch.allclose(cached_prompt_embeds["prompt_embeds"].cpu().float(), prompt_embeds[i].cpu().float(), atol=1e-3), f"Cached prompt embeds for prompt {prompt} do not match the computed prompt embeds. Make sure that the cached prompt embeds are correct., {torch.mean(torch.abs(cached_prompt_embeds['prompt_embeds'].cpu().float() - prompt_embeds[i].cpu().float())) = }, {torch.mean(torch.abs(cached_prompt_embeds['prompt_embeds'].cpu().float())) = }"  
-					# 	assert torch.allclose(cached_prompt_embeds["pooled_prompt_embeds"].cpu().float(), pooled_prompt_embeds[i].cpu().float(), atol=1e-3), f"Cached pooled prompt embeds for prompt {prompt} do not match the computed pooled prompt embeds. Make sure that the cached pooled prompt embeds are correct., {torch.mean(torch.abs(cached_prompt_embeds['pooled_prompt_embeds'].cpu().float() - pooled_prompt_embeds[i].cpu().float())) = }" 
+					for i, prompt in enumerate(batch["prompts"]): 
+						# prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(
+						# 	text_encoders=[text_encoder_one, text_encoder_two],
+						# 	tokenizers=[tokenizer_one, tokenizer_two], 
+						# 	prompt=prompt, 
+						# 	max_sequence_length=512, 
+						# 	device=accelerator.device, 
+						# )
+						print(f"{prompt_embeds.shape = }, {pooled_prompt_embeds.shape = }, {text_ids.shape = }") 
+						# checking if the cached embeddings match 
+						inference_embeds_dir = "/archive/vaibhav.agrawal/a-bev-of-the-latents/inference_embeds_datasetv7_superhard"
+						cached_prompt_path = osp.join(inference_embeds_dir, f"{'_'.join(prompt.lower().split())}.pth") 
+						assert osp.exists(cached_prompt_path), f"Make sure that the cached prompt embedding {cached_prompt_path} exists." 
+						cached_prompt_embeds = torch.load(cached_prompt_path, map_location="cpu") 
+						assert torch.allclose(cached_prompt_embeds["prompt_embeds"].cpu().float(), prompt_embeds[i].cpu().float(), atol=1e-3), f"Cached prompt embeds for prompt {prompt} do not match the computed prompt embeds. Make sure that the cached prompt embeds are correct., {torch.mean(torch.abs(cached_prompt_embeds['prompt_embeds'].cpu().float() - prompt_embeds[i].cpu().float())) = }, {torch.mean(torch.abs(cached_prompt_embeds['prompt_embeds'].cpu().float())) = }"  
+						assert torch.allclose(cached_prompt_embeds["pooled_prompt_embeds"].cpu().float(), pooled_prompt_embeds[i].cpu().float(), atol=1e-3), f"Cached pooled prompt embeds for prompt {prompt} do not match the computed pooled prompt embeds. Make sure that the cached pooled prompt embeds are correct., {torch.mean(torch.abs(cached_prompt_embeds['pooled_prompt_embeds'].cpu().float() - pooled_prompt_embeds[i].cpu().float())) = }" 
+						print(f"fucking passed the test!")
 				else: 
 					assert "prompt_embeds" in batch and "pooled_prompt_embeds" in batch, "Make sure that the dataloader returns `prompt_embeds` and `pooled_prompt_embeds` when `inference_embeds_dir` is not None." 
 					prompt_embeds = batch["prompt_embeds"] 

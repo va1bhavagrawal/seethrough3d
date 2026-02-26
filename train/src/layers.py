@@ -99,7 +99,6 @@ class MultiSingleStreamBlockLoraProcessor(nn.Module):
         use_cond = False,
         call_ids = None, 
         cuboids_segmasks: torch.Tensor = None, 
-        store_qk: Optional[str] = None, 
     ) -> torch.FloatTensor:
                 
         batch_size, seq_len, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
@@ -155,16 +154,13 @@ class MultiSingleStreamBlockLoraProcessor(nn.Module):
                 for subject_idx, call_ids_this_subject in enumerate(call_ids_this_example): 
                     # preparing the cuboid mask 
                     cuboid_mask = cuboids_segmasks[batch_idx][subject_idx]  # (h, w) 
-                    # assert cuboid_mask.shape == (int(math.sqrt(num_img_tokens)), int(math.sqrt(num_img_tokens))), f"{cuboid_mask.shape=}, {num_img_tokens=}"  
                     cuboid_mask = cuboid_mask.to(torch.bool)
 
-                    # assert scaled_block_size == scaled_cond_size + 512, f"{scaled_cond_size=}, {scaled_block_size=}"  
                     for i in range(num_cond_blocks): 
                         cuboid_mask = cuboids_segmasks[batch_idx][subject_idx]  # (h, w) 
                         cuboid_mask = cuboid_mask.to(torch.bool) 
                         # masking out the condition tokens -> text token attention map  
                         mask_subset = mask[batch_idx, :, scaled_block_size + i*scaled_cond_size : scaled_block_size + (i+1)*scaled_cond_size, call_ids_this_subject] 
-                        # assert mask_subset.shape == (1, num_img_tokens, len(call_ids_this_subject)), f"{mask_subset.shape=}, {attn.heads=}, {num_img_tokens=}, {len(call_ids_this_subject)=}"   
                         mask_subset[:, cuboid_mask.flatten()] = 0  # enable attention to cuboid regions 
 
                         mask[batch_idx, :, scaled_block_size + i*scaled_cond_size : scaled_block_size + (i+1)*scaled_cond_size, call_ids_this_subject] = mask_subset 
@@ -174,14 +170,6 @@ class MultiSingleStreamBlockLoraProcessor(nn.Module):
         mask = mask.to(query.dtype)
 
         hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False, attn_mask=mask)
-
-        if store_qk:  
-            attn_weights = query.detach().to(torch.float16) @ key.detach().to(torch.float16).transpose(-1, -2)  # (batch_size, num_heads, query_len, key_len)
-            attn_weights = attn_weights + mask 
-            attn_weights = torch.mean(torch.softmax(attn_weights, dim=-1), dim=1)  
-            attn_weights = attn_weights.cpu() 
-            os.makedirs(osp.dirname(store_qk), exist_ok=True) 
-            torch.save(attn_weights, store_qk + ".pth") 
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
@@ -228,7 +216,6 @@ class MultiDoubleStreamBlockLoraProcessor(nn.Module):
         use_cond=False,
         call_ids = None, 
         cuboids_segmasks: torch.Tensor = None, 
-        store_qk: Optional[str] = None, 
     ) -> torch.FloatTensor:
         
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
@@ -309,16 +296,13 @@ class MultiDoubleStreamBlockLoraProcessor(nn.Module):
                 for subject_idx, call_ids_this_subject in enumerate(call_ids_this_example): 
                     # preparing the cuboid mask 
                     cuboid_mask = cuboids_segmasks[batch_idx][subject_idx]  # (h, w) 
-                    # assert cuboid_mask.shape == (int(math.sqrt(num_img_tokens)), int(math.sqrt(num_img_tokens))), f"{cuboid_mask.shape=}, {num_img_tokens=}, {scaled_block_size=}"  
                     cuboid_mask = cuboid_mask.to(torch.bool)
 
-                    # assert scaled_block_size == scaled_cond_size + 512, f"{scaled_cond_size=}, {scaled_block_size=}"  
                     for i in range(num_cond_blocks): 
                         cuboid_mask = cuboids_segmasks[batch_idx][subject_idx]  # (h, w) 
                         cuboid_mask = cuboid_mask.to(torch.bool) 
                         # masking out the condition tokens -> text token attention map  
                         mask_subset = mask[batch_idx, :, scaled_block_size + i*scaled_cond_size : scaled_block_size + (i+1)*scaled_cond_size, call_ids_this_subject] 
-                        # assert mask_subset.shape == (1, num_img_tokens, len(call_ids_this_subject)), f"{mask_subset.shape=}, {attn.heads=}, {num_img_tokens=}, {len(call_ids_this_subject)=}"   
                         mask_subset[:, cuboid_mask.flatten()] = 0  # enable attention to cuboid regions 
 
                         mask[batch_idx, :, scaled_block_size + i*scaled_cond_size : scaled_block_size + (i+1)*scaled_cond_size, call_ids_this_subject] = mask_subset 
@@ -328,15 +312,6 @@ class MultiDoubleStreamBlockLoraProcessor(nn.Module):
         mask = mask.to(query.dtype)
         
         hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False, attn_mask=mask)
-
-        if store_qk:  
-            attn_weights = query.detach().to(torch.float16) @ key.detach().to(torch.float16).transpose(-1, -2)  # (batch_size, num_heads, query_len, key_len)
-            attn_weights = attn_weights + mask 
-            attn_weights = torch.mean(torch.softmax(attn_weights, dim=-1), dim=1)  
-            attn_weights = attn_weights.cpu() 
-            os.makedirs(osp.dirname(store_qk), exist_ok=True) 
-            torch.save(attn_weights, store_qk + ".pth") 
-
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)

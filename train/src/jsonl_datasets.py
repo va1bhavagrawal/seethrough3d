@@ -8,49 +8,6 @@ import os
 import os.path as osp 
 import cv2
 
-def do_z_pass(seg_masks: torch.Tensor, dist_values: torch.Tensor) -> torch.Tensor:
-    """
-    Performs a z-pass on segmentation masks based on distance values to the camera.
-    For each pixel, if multiple subjects' masks are active, only the one with the smallest distance (closest) remains active.
-    
-    Args:
-        seg_masks (torch.Tensor): Binary segmentation masks of shape (n_subjects, h, w) with dtype uint8.
-        dist_values (torch.Tensor): Distance values for each subject of shape (n_subjects,).
-    
-    Returns:
-        torch.Tensor: Processed segmentation masks after z-pass, same shape and dtype as seg_masks.
-    """
-    # Ensure tensors are on the same device
-    device = seg_masks.device
-    
-    # Get dimensions
-    n_subjects, h, w = seg_masks.shape
-    
-    # Reshape distance values for broadcasting across spatial dimensions
-    dist_values_expanded = dist_values.view(n_subjects, 1, 1)
-    
-    # Create a tensor where active pixels have their distance, others have a high value (1e10)
-    masked_dist = torch.where(seg_masks.bool(), dist_values_expanded, torch.tensor(1e10, device=device))
-    
-    # Find the subject index with the minimum distance for each pixel (shape (h, w))
-    closest_indices = torch.argmin(masked_dist, dim=0)
-    
-    # Initialize output tensor with zeros
-    output = torch.zeros_like(seg_masks)
-    
-    # Scatter 1s into the output tensor where the closest subject's indices are
-    # closest_indices.unsqueeze(0) adds a dummy dimension to match scatter's expected shape
-    output.scatter_(
-        dim=0,
-        index=closest_indices.unsqueeze(0),
-        src=torch.ones_like(closest_indices.unsqueeze(0), dtype=output.dtype)
-    )
-    
-    # Zero out any positions where the original mask was inactive
-    output = output * seg_masks
-    
-    return output
-
 Image.MAX_IMAGE_PIXELS = None
 
 def multiple_16(num: float):
@@ -70,7 +27,7 @@ def load_image_safely(image_path, size):
             f.write(f"{image_path}\n")
         return Image.new("RGB", (size, size), (255, 255, 255))
     
-def make_train_dataset(args, tokenizer, accelerator):
+def make_train_dataset(args, tokenizer, accelerator, noise_size, only_realistic_images=False):
     if args.current_train_data_dir is not None:
         print("load_data")
         dataset = load_dataset('json', data_files=args.current_train_data_dir)
@@ -82,36 +39,16 @@ def make_train_dataset(args, tokenizer, accelerator):
     
     # 6. Get the column names for input/target.
     target_column = args.target_column
-    if args.subject_column is not None:
-        subject_columns = args.subject_column.split(",")
+    if only_realistic_images:
+        before = len(dataset["train"])
+        dataset["train"] = dataset["train"].filter(lambda example: osp.basename(example[target_column]) != "main.jpg")
+        after = len(dataset["train"])
+        print(f"[only_realistic_images] filtered out {before - after} examples")
+
     if args.spatial_column is not None:
         spatial_columns= args.spatial_column.split(",")
     
     size = args.cond_size
-    # by default the noise size would be randomly sampled from (512, 1024) 
-    # noise_size = get_random_resolution(max_size=args.noise_size) # maybe 768 or higher
-    noise_size = get_random_resolution(min_size=512, max_size=512) # maybe 768 or higher
-    # subject_cond_train_transforms = transforms.Compose(
-    #     [
-    #         transforms.Lambda(lambda img: img.resize((
-    #             multiple_16(size * img.size[0] / max(img.size)),
-    #             multiple_16(size * img.size[1] / max(img.size))
-    #         ), resample=Image.BILINEAR)),
-    #         transforms.RandomHorizontalFlip(p=0.7),
-    #         transforms.RandomRotation(degrees=20),
-    #         transforms.Lambda(lambda img: transforms.Pad(
-    #             padding=(
-    #                 int((size - img.size[0]) / 2),
-    #                 int((size - img.size[1]) / 2),
-    #                 int((size - img.size[0]) / 2),
-    #                 int((size - img.size[1]) / 2) 
-    #             ),
-    #             fill=0 
-    #         )(img)),
-    #         transforms.ToTensor(),
-    #         transforms.Normalize([0.5], [0.5]),
-    #     ]
-    # )
     cond_train_transforms = transforms.Compose(
         [
             transforms.Resize((size, size), interpolation=transforms.InterpolationMode.BILINEAR),
@@ -120,7 +57,6 @@ def make_train_dataset(args, tokenizer, accelerator):
             transforms.Normalize([0.5], [0.5]),
         ]
     )
-    subject_cond_train_transforms = cond_train_transforms  
 
     def train_transforms(image, noise_size):
         train_transforms_ = transforms.Compose(
@@ -138,11 +74,6 @@ def make_train_dataset(args, tokenizer, accelerator):
     
     def load_and_transform_cond_images(images):
         transformed_images = [cond_train_transforms(image) for image in images]
-        concatenated_image = torch.cat(transformed_images, dim=1)
-        return concatenated_image
-    
-    def load_and_transform_subject_images(images):
-        transformed_images = [subject_cond_train_transforms(image) for image in images]
         concatenated_image = torch.cat(transformed_images, dim=1)
         return concatenated_image
     
@@ -176,12 +107,12 @@ def make_train_dataset(args, tokenizer, accelerator):
                 prompt_file_name = "space_prompt.pth" 
             else: 
                 prompt_file_name = "_".join(caption.split(" ")) + ".pth" 
-            if osp.exists(osp.join(args.inference_embeds_dir, prompt_file_name)): 
+            if args.inference_embeds_dir is not None: 
+                assert osp.exists(osp.join(args.inference_embeds_dir, prompt_file_name)), f"Prompt embeddings for '{caption}' not found in {args.inference_embeds_dir}. Please precompute and save them." 
                 prompt_embeds = torch.load(osp.join(args.inference_embeds_dir, prompt_file_name), map_location="cpu") 
                 pooled_prompt_embeds = prompt_embeds["pooled_prompt_embeds"] 
                 prompt_embeds = prompt_embeds["prompt_embeds"] 
             else: 
-                # raise FileNotFoundError(f"Prompt embeddings for '{caption}' not found in {args.inference_embeds_dir}. Please precompute and save them.") 
                 prompt_embeds = torch.zeros((1, 77, 768))  # Placeholder tensor
                 pooled_prompt_embeds = torch.zeros((1, 768))  # Placeholder tensor
             all_prompt_embeds.append(prompt_embeds.squeeze(0)) 
@@ -233,9 +164,6 @@ def make_train_dataset(args, tokenizer, accelerator):
     def preprocess_train(examples):
         _examples = {}
         train_data_dir = osp.dirname(args.current_train_data_dir)
-        if args.subject_column is not None:
-            subject_images = [[load_image_safely(osp.join(train_data_dir, examples[column][i]), args.cond_size) for column in subject_columns] for i in range(len(examples[target_column]))]
-            _examples["subject_pixel_values"] = [load_and_transform_subject_images(subject) for subject in subject_images]
         if args.spatial_column is not None:
             # this now has two conditions 
             spatial_images = [[load_image_safely(osp.join(train_data_dir, examples[column][i]), args.cond_size) for column in spatial_columns] for i in range(len(examples[target_column]))]
@@ -245,9 +173,7 @@ def make_train_dataset(args, tokenizer, accelerator):
         _examples["PLACEHOLDER_prompts"] = examples["PLACEHOLDER_prompts"]
         subjects = examples["subjects"] 
         _examples["subjects"] = subjects 
-        subjects_ = ["_".join(subject) for subject in subjects] # get the subject names with "_" instead of space 
         _examples["prompts"] = [] 
-        # getting the prompts by replacing the PLACEHOLDER in the prompt with the actual subject names  
         for i in range(len(examples["subjects"])): 
             # replace the subjects string in the PLACEHOLDER 
             prompt = examples["PLACEHOLDER_prompts"][i] 
@@ -255,7 +181,6 @@ def make_train_dataset(args, tokenizer, accelerator):
             prompt = prompt.replace("PLACEHOLDER", placeholder_string) 
             _examples["prompts"].append(prompt) 
         _examples["prompt_embeds"], _examples["pooled_prompt_embeds"] = retrieve_prompt_embeds_from_disk(args, _examples) 
-        # gettin the z passed cuboids segmentation mask 
         _examples["cuboids_segmasks"] = [] 
 
         def generous_resize_batch(masks, new_h, new_w):
@@ -290,9 +215,6 @@ def make_train_dataset(args, tokenizer, accelerator):
             segmasks_this_example[~mask] = 0 
             segmasks_this_example = generous_resize_batch(segmasks_this_example, 32, 32) 
             assert segmasks_this_example.shape == (len(subjects[i]), 32, 32), f"Segmentation masks shape {segmasks_this_example.shape} does not match expected shape {(len(subjects[i]), 32, 32)} for example {i}" 
-            # z_passed_segmask = do_z_pass(segmasks_this_example, depth_values_this_example) 
-            # print(f"{z_passed_segmask.shape = }, {segmasks_this_example.shape = }")
-            # _examples["cuboids_segmasks"].append(z_passed_segmask) 
             _examples["cuboids_segmasks"].append(segmasks_this_example) 
 
         _examples["token_ids_clip"], _examples["token_ids_t5"] = tokenize_prompt_clip_t5(_examples)
@@ -316,12 +238,6 @@ def collate_fn(examples):
         cond_pixel_values = cond_pixel_values.to(memory_format=torch.contiguous_format).float()
     else:
         cond_pixel_values = None
-    if examples[0].get("subject_pixel_values") is not None: 
-        subject_pixel_values = torch.stack([example["subject_pixel_values"] for example in examples])
-        subject_pixel_values = subject_pixel_values.to(memory_format=torch.contiguous_format).float()
-    else:
-        subject_pixel_values = None
-
     target_pixel_values = torch.stack([example["pixel_values"] for example in examples])
     target_pixel_values = target_pixel_values.to(memory_format=torch.contiguous_format).float()
     token_ids_clip = torch.stack([torch.tensor(example["token_ids_clip"]) for example in examples])
@@ -335,7 +251,6 @@ def collate_fn(examples):
 
     return {
         "cond_pixel_values": cond_pixel_values,
-        "subject_pixel_values": subject_pixel_values,
         "pixel_values": target_pixel_values,
         "text_ids_1": token_ids_clip,
         "text_ids_2": token_ids_t5,

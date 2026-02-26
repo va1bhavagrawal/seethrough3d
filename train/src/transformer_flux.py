@@ -395,9 +395,9 @@ class FluxTransformer2DModel(
         if self.original_attn_processors is not None:
             self.set_attn_processor(self.original_attn_processors)
 
-    def _set_gradient_checkpointing(self, module, value=False):
+    def _set_gradient_checkpointing(self, module, enable=False):  
         if hasattr(module, "gradient_checkpointing"):
-            module.gradient_checkpointing = value
+            module.gradient_checkpointing = enable  
 
     def forward(
         self,
@@ -416,7 +416,6 @@ class FluxTransformer2DModel(
         controlnet_blocks_repeat: bool = False,
         call_ids: list = None,  
         cuboids_segmasks: torch.Tensor = None, 
-        store_qk: bool = False, 
     ) -> Union[torch.Tensor, Transformer2DModelOutput]:
         if cond_hidden_states is not None:
             use_condition = True
@@ -512,10 +511,6 @@ class FluxTransformer2DModel(
                 )
 
             else:
-                if store_qk: 
-                    overall_block_idx = index_block 
-                    joint_attention_kwargs["store_qk"] = osp.join(store_qk, f"{str(overall_block_idx).zfill(3)}") 
-
                 encoder_hidden_states, hidden_states, cond_hidden_states = block(
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
@@ -566,10 +561,6 @@ class FluxTransformer2DModel(
                 )
 
             else:
-                if store_qk: 
-                    overall_block_idx = index_block + len(self.transformer_blocks) 
-                    joint_attention_kwargs["store_qk"] = osp.join(store_qk, f"{str(overall_block_idx).zfill(3)}") 
-
                 hidden_states, cond_hidden_states = block(
                     hidden_states=hidden_states,
                     cond_hidden_states=cond_hidden_states if use_condition else None,
