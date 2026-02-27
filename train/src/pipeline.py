@@ -619,11 +619,7 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin, FromSingleFileMixin):
             cond_size=512,
             call_ids=None, 
             cuboids_segmasks=None,
-            store_qk=None, 
-            store_qk_timesteps=None, 
     ):
-        assert not ((store_qk is None) ^ (store_qk_timesteps is None)), "Please provide both store_qk and store_qk_timesteps or neither of them." 
-
         height = height or self.default_sample_size * self.vae_scale_factor
         width = width or self.default_sample_size * self.vae_scale_factor
         self.cond_size = cond_size
@@ -756,12 +752,6 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin, FromSingleFileMixin):
                 if self.interrupt:
                     continue
 
-                store_qk_ = copy.deepcopy(store_qk) 
-                if (store_qk_ is not None) and (i not in store_qk_timesteps):
-                    store_qk_ = None 
-                elif store_qk_ is not None: 
-                    store_qk_ = osp.join(store_qk, f"step_{i}") 
-
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latents.shape[0]).to(latents.dtype)
                 noise_pred = self.transformer(
@@ -777,7 +767,6 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin, FromSingleFileMixin):
                     return_dict=False,
                     call_ids=call_ids, 
                     cuboids_segmasks=cuboids_segmasks, 
-                    store_qk=store_qk_, 
                 )[0]
 
                 # compute the previous noisy sample x_t -> x_t-1

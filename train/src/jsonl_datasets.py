@@ -107,8 +107,7 @@ def make_train_dataset(args, tokenizer, accelerator, noise_size, only_realistic_
                 prompt_file_name = "space_prompt.pth" 
             else: 
                 prompt_file_name = "_".join(caption.split(" ")) + ".pth" 
-            if args.inference_embeds_dir is not None: 
-                assert osp.exists(osp.join(args.inference_embeds_dir, prompt_file_name)), f"Prompt embeddings for '{caption}' not found in {args.inference_embeds_dir}. Please precompute and save them." 
+            if args.inference_embeds_dir is not None and osp.exists(osp.join(args.inference_embeds_dir, prompt_file_name)):
                 prompt_embeds = torch.load(osp.join(args.inference_embeds_dir, prompt_file_name), map_location="cpu") 
                 pooled_prompt_embeds = prompt_embeds["pooled_prompt_embeds"] 
                 prompt_embeds = prompt_embeds["prompt_embeds"] 
