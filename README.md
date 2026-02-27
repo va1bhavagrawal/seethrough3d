@@ -1,4 +1,4 @@
-# [CVPR-26] SeeThrough3D: Occlusion Aware 3D Control in Text-to-Image Generation
+# [CVPR-26 🎉] SeeThrough3D: Occlusion Aware 3D Control in Text-to-Image Generation
 
 <!-- ---
 pipeline_tag: occlusion aware 3d control in text-to-image generation    # Specify the task
@@ -21,7 +21,7 @@ tags:                            # Add extra tags which would make the repo sear
   <img src="assets/teaser_camera_ready.svg" width="50%">
 </div>
 
-## Setting up the environment 
+## 🚀 Getting started 
 
 We recommend creating a `conda` environment named `st3d` with Python 3.11:
 
@@ -36,9 +36,9 @@ Install the dependencies using the provided `requirements.txt`:
 pip install -r requirements.txt
 ```
 
-## Inference 
+## 🎨 Inference 
 
-### Downloading pre-trained checkpoint 
+### 🌐 Downloading pre-trained checkpoint 
 
 We use [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) as the base model. To download the SeeThrough3D LoRA checkpoint,
 ```bash
@@ -62,18 +62,20 @@ The created 3D layouts can be saved by clicking the `💾 Save Scene` button. Th
 
 The interface requires some available ports on the host machine, these can be configured in `inference/config.py`. 
 
-### Notebook Inference  
+### 📒 Notebook Inference  
 
 The inference notebook is located in `inference/infer.ipynb`. It is able to load a scene saved by the 🤗 Gradio interface (described above), visualize the inputs to the model, and perform inference. The inference notebook also requires some available ports on the host machine, these can be configured in `inference/config.py`.  
 
-## Training  
+## 🏋 Training  
 
-### Dataset
+### 🌐 Downloading the Dataset
 
 ```bash
 cd dataset 
 
 ```
+
+### 🏃 Run Training
 
 We train the model for a single epoch at resolution 512, effective batch size of 2 (~25K steps). This requires 2x 80 GB GPUs (one image per GPU). 
 ```bash
@@ -97,4 +99,4 @@ conda activate st3d
 
 Now, set the flag `--inference_embeds_dir` in `train/train.sh` to the location of the cached text embeddings.
 
-> **Note:** The VRAM requirements can be reduced by training time optimizations such as gradient checkpointing. We plan to implement this in the future. We are also welcome to any PRs regarding this.  
+> **Note:** The VRAM requirements can be further reduced using training time optimizations such as gradient checkpointing. We plan to implement this in the future. We are also welcome to any PRs regarding this.  

@@ -302,8 +302,6 @@ MASK_RES = 50
 THRESHOLD_LOWER = 150 
 THRESHOLD_UPPER = 768  
 
-ROOT_OBJS_DIR = "/ssd_scratch/vaibhav.agrawal/a-bev-of-the-latents/glb_files/"  
-
 OBJ_SIDE_LENGTH = 2.0 
 
 def calculate_iou(box1, box2):
