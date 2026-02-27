@@ -1,5 +1,5 @@
 export MODEL_DIR="black-forest-labs/FLUX.1-dev" # your flux path
-export OUTPUT_DIR="/archive/vaibhav.agrawal/a-bev-of-the-latents/easycontrol_cuboids"  # your save path
+export OUTPUT_DIR="/archive/vaibhav.agrawal/a-bev-of-the-latents/checkpoints"  # your save path
 export CONFIG="./default_config.yaml"
 export TRAIN_DATA="/archive/vaibhav.agrawal/a-bev-of-the-latents/datasetv9/rgb.jsonl" # your data jsonl file 
 export LOG_PATH="$OUTPUT_DIR/log"
@@ -7,7 +7,7 @@ export LOG_PATH="$OUTPUT_DIR/log"
 accelerate launch --config_file $CONFIG train.py \
     --pretrained_model_name_or_path $MODEL_DIR \
     --cond_size=512 \
-    --spatial_column="cv" \
+    --spatial_column="oscr" \
     --target_column="target" \
     --caption_column="caption" \
     --ranks 128 \
