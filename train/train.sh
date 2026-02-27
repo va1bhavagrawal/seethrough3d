@@ -20,7 +20,7 @@ accelerate launch --config_file $CONFIG train.py \
     --mixed_precision="bf16" \
     --train_data_dir=$TRAIN_DATA \
     --learning_rate=1e-4 \
-    --train_batch_size=1 \
+    --train_batch_size=2 \
     --stage1_epochs=1 \
     --stage2_steps=5000 \
     --checkpointing_steps=5000

@@ -1351,7 +1351,7 @@ with gr.Blocks(
     }
     """
 ) as demo:
-    gr.Markdown("# [CVPR-2026] 3D Aware Occlusion Control in Text-to-Image Generation 🏞️🧱")
+    gr.Markdown("# [CVPR-2026] Occlusion Aware 3D Control in Text-to-Image Generation")
     # TOP ROW
     with gr.Row():
         # TOP LEFT - Edit Properties
