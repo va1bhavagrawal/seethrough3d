@@ -16,7 +16,9 @@ tags:                            # Add extra tags which would make the repo sear
 
 [![arXiv](https://img.shields.io/badge/arXiv-2602.23359-b31b1b.svg)](https://arxiv.org/abs/2602.23359)
 [![Project Page](https://img.shields.io/badge/Project-Page-blue.svg)](https://seethrough3d.github.io)
-[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Dataset-yellow)](https://huggingface.co/datasets/va1bhavagrawa1/seethrough3d-data/tree/main)
+[![GitHub](https://img.shields.io/badge/GitHub-Repository-black.svg)](https://github.com/va1bhavagrawal/seethrough3d.git)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Model-yellow)](https://huggingface.co/va1bhavagrawa1/seethrough3d)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Dataset-orange)](https://huggingface.co/datasets/va1bhavagrawa1/seethrough3d-data/tree/main)
 
 
 <div align="center">
@@ -47,7 +49,9 @@ Inference of this model requires ~38 GB VRAM on the GPU. Note that the inference
 
 We use [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) as the base model. To download the SeeThrough3D LoRA checkpoint,
 ```bash
-cd checkpoints 
+cd checkpoints/seethrough3d_release/ 
+conda activate st3d 
+python3 download_checkpoint.py 
 ``` 
 <div align="center">
   <img src="assets/gradio_demo.png" width="100%">

@@ -10,7 +10,7 @@ from train.src.pipeline import FluxPipeline
 from train.src.transformer_flux import FluxTransformer2DModel
 from train.src.lora_helper import set_single_lora, set_multi_lora, unset_lora
 from train.src.jsonl_datasets import make_train_dataset, collate_fn
-import config
+import inference.config as config 
 
 
 class InferenceArgs:

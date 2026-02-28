@@ -15,7 +15,7 @@ import math
 import mathutils 
 import random 
 import cv2 
-from object_scales import scales 
+from inference.object_scales import scales 
 import matplotlib.colors as mcolors
 import torch 
 

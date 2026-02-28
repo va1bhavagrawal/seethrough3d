@@ -20,12 +20,12 @@ import requests
 import json
 import pickle 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from object_scales import scales  
+from inference.object_scales import scales  
 from transformers import CLIPTokenizer, PretrainedConfig, T5TokenizerFast
 import pickle 
 from datetime import datetime 
-from infer_backend import initialize_inference_engine, run_inference_from_gradio
-import config
+from inference.infer_backend import initialize_inference_engine, run_inference_from_gradio
+import inference.config as config 
 
 COLORS = [
     (1.0, 0.0, 0.0),    # Red
