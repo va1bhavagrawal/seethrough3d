@@ -61,6 +61,8 @@ conda activate st3d
 python3 app.py 
 ``` 
 
+For a detailed guide on how to use the Gradio interface, please refer to the [Gradio Wiki](gradio_wiki.md).
+
 The created 3D layouts can be saved by clicking the `💾 Save Scene` button. This functionality stores the 3D layout along with other information such as seed, image size, prompt, etc. in a pickle file. We also provide various example layouts under the `🖼️ Examples` section.  
 
 
@@ -68,7 +70,7 @@ The interface requires some available ports on the host machine, these can be co
 
 ### 📒 Notebook Inference  
 
-The inference notebook is located in `inference/infer.ipynb`. It is able to load a scene saved by the 🤗 Gradio interface (described above), visualize the inputs to the model, and perform inference. The inference notebook also requires some available ports on the host machine, these can be configured in `inference/config.py`.  
+The inference notebook is located at `infer.ipynb`. It is able to load a scene saved by the 🤗 Gradio interface (described above), visualize the inputs to the model, and perform inference. The inference notebook also requires some available ports on the host machine, these can be configured in `inference/config.py`.  
 
 ## 🏋 Training  
 
