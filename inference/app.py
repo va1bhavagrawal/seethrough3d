@@ -7,11 +7,17 @@ os.environ["TEMP_DIR"]="./gradio_tmp"
 os.environ["TMPDIR"]="./gradio_tmp" 
 import os.path as osp 
 import sys
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import numpy as np
 import tempfile
 import shutil 
 import base64
 import io
+import threading
+import queue
 from PIL import Image
 import gradio as gr
 import time
@@ -52,7 +58,7 @@ num_added_tokens = tokenizer.add_tokens(placeholder_token_str)
 assert num_added_tokens == 1 
 
 def generate_image_event(camera_elevation, camera_lens, surrounding_prompt, checkpoint_name, 
-                        image_size, seed, guidance_scale, num_steps):
+                        image_size, seed, guidance_scale, num_steps, scene_manager):
     """Generate final image with segmentation masks and run inference"""
     # Update scene manager's inference params before generation
     scene_manager.update_inference_params(image_size, image_size, seed, guidance_scale, num_steps, checkpoint_name)
@@ -60,7 +66,8 @@ def generate_image_event(camera_elevation, camera_lens, surrounding_prompt, chec
         return (
             "⚠️ No objects to render",
             gr.update(),
-            Image.new('RGB', (512, 512), color='white')
+            Image.new('RGB', (512, 512), color='white'),
+            scene_manager
         )
     
     # Get subject descriptions
@@ -98,9 +105,12 @@ def generate_image_event(camera_elevation, camera_lens, surrounding_prompt, chec
     # Convert to server expected format
     subjects_data, camera_data = scene_manager._convert_to_blender_format()
     
-    # Render final high-quality image using CYCLES (port 5002)
-    final_img = scene_manager.render_client._send_render_request(
-        scene_manager.render_client.final_server_url, 
+    # Acquire a Blender worker for all rendering in this generation
+    render_client = blender_pool.acquire()
+    
+    # Render final high-quality image using CYCLES
+    final_img = render_client._send_render_request(
+        render_client.final_server_url, 
         subjects_data, 
         camera_data
     )
@@ -108,17 +118,19 @@ def generate_image_event(camera_elevation, camera_lens, surrounding_prompt, chec
     final_img.save("model_condition.jpg") 
     
     # Render segmentation masks
-    success, segmask_images, error_msg = scene_manager.render_client.render_segmasks(subjects_data, camera_data)
+    success, segmask_images, error_msg = render_client.render_segmasks(subjects_data, camera_data)
     
     if not success:
+        blender_pool.release(render_client)
         return (
             f"❌ Failed to render segmentation masks: {error_msg}",
             gr.update(),
-            Image.new('RGB', (512, 512), color='white')
+            Image.new('RGB', (512, 512), color='white'),
+            scene_manager
         )
 
-    # Save all files to the correct location  
-    root_save_dir = config.GRADIO_FILES_DIR 
+    # Save all files to the per-session directory  
+    root_save_dir = scene_manager.session_files_dir 
     os.makedirs(root_save_dir, exist_ok=True)
     os.system(f"rm -f {root_save_dir}/*") 
     
@@ -150,41 +162,47 @@ def generate_image_event(camera_elevation, camera_lens, surrounding_prompt, chec
     with open(jsonl_path, "w") as f: 
         json.dump(jsonl[0], f)
     
-    # Run inference using the pre-loaded model
+    # Run inference using the pre-loaded model (GPU lock ensures serial execution)
     print(f"\n{'='*60}")
     print(f"RUNNING INFERENCE")
     print(f"{'='*60}\n")
     
-    inference_success, generated_image, inference_msg = run_inference_from_gradio(
-        checkpoint_name=checkpoint_name,
-        height=image_size,
-        width=image_size,
-        seed=seed,
-        guidance_scale=guidance_scale,
-        num_inference_steps=num_steps,
-        jsonl_path=jsonl_path
-    )
+    with gpu_lock:
+        inference_success, generated_image, inference_msg = run_inference_from_gradio(
+            checkpoint_name=checkpoint_name,
+            height=image_size,
+            width=image_size,
+            seed=seed,
+            guidance_scale=guidance_scale,
+            num_inference_steps=num_steps,
+            jsonl_path=jsonl_path
+        )
     
     if not inference_success:
+        blender_pool.release(render_client)
         return (
             f"✅ Saved files but inference failed: {inference_msg}",
             final_img,
-            Image.new('RGB', (512, 512), color='white')
+            Image.new('RGB', (512, 512), color='white'),
+            scene_manager
         )
     
     status_msg = f"✅ Generated image using {checkpoint_name} with {len(segmask_images)} segmentation masks"
 
     # Render final image for camera view
-    final_img = scene_manager.render_client._send_render_request(
-        scene_manager.render_client.cv_server_url, 
+    final_img = render_client._send_render_request(
+        render_client.cv_server_url, 
         subjects_data, 
         camera_data
     )
     
+    blender_pool.release(render_client)
+    
     return (
         status_msg,
         final_img,  # Display CV render in Camera View
-        generated_image  # Display generated image in Generated Image section
+        generated_image,  # Display generated image in Generated Image section
+        scene_manager
     )
 
 
@@ -254,10 +272,7 @@ def rgb_to_hex(rgb_tuple):
 
 
 class BlenderRenderClient:
-    def __init__(self, 
-                 cv_server_url=config.BLENDER_CV_SERVER_URL, 
-                 segmask_server_url=config.BLENDER_SEGMASK_SERVER_URL, 
-                 final_server_url=config.BLENDER_FINAL_SERVER_URL): 
+    def __init__(self, cv_server_url: str, segmask_server_url: str, final_server_url: str): 
         """
         Initialize the Blender render client.
         
@@ -360,7 +375,36 @@ class BlenderRenderClient:
     def _create_error_image(self, color: str) -> Image.Image:
         """Create a colored error image."""
         return Image.new('RGB', (512, 512), color=color)
+
+
+# --- Blender Worker Pool (global, shared across all sessions) ---
+class BlenderWorkerPool:
+    """Thread-safe pool of BlenderRenderClient instances.
     
+    Callers use acquire() / release() to borrow a client from the pool.
+    If the pool is empty, acquire() blocks until a client is returned.
+    """
+
+    def __init__(self):
+        self._pool = queue.Queue()
+
+    def add_worker(self, client: BlenderRenderClient):
+        self._pool.put(client)
+
+    def acquire(self) -> BlenderRenderClient:
+        """Block until a BlenderRenderClient is available and return it."""
+        return self._pool.get()
+
+    def release(self, client: BlenderRenderClient):
+        """Return a BlenderRenderClient to the pool."""
+        self._pool.put(client)
+
+
+# Global resources shared across all user sessions
+blender_pool = BlenderWorkerPool()
+gpu_lock = threading.Lock()
+
+
 # --- Scene Management Class ---
 class SceneManager:
     def __init__(self):
@@ -390,8 +434,8 @@ class SceneManager:
             'checkpoint': config.CHECKPOINT_NAMES[0] if config.CHECKPOINT_NAMES else None
         }
         
-        # Initialize BlenderRenderClient
-        self.render_client = BlenderRenderClient()
+        # Per-session temp directory for rendered files (isolated per user)
+        self.session_files_dir = tempfile.mkdtemp(prefix="gradio_session_")
         
         # Load asset dimensions
         self.asset_dimensions = self._load_asset_dimensions()
@@ -705,16 +749,16 @@ class SceneManager:
         
         return subjects_data, camera_data
 
-    def render_cv_view(self, subjects_data: list, camera_data: dict) -> Image.Image:
+    def render_cv_view(self, subjects_data: list, camera_data: dict, render_client: BlenderRenderClient) -> Image.Image:
         """Render only the CV view."""
         if not subjects_data:
             return Image.new('RGB', (512, 512), color='gray')
         
-        return self.render_client._send_render_request(self.render_client.cv_server_url, subjects_data, camera_data)
+        return render_client._send_render_request(render_client.cv_server_url, subjects_data, camera_data)
 
 
     def render_scene(self, width=512, height=512):
-        """Render only CV view using the render client."""
+        """Render only CV view by acquiring a worker from the global pool."""
         print(f"calling render_scene")
         if not self.objects:
             # Return empty image if no objects
@@ -725,17 +769,19 @@ class SceneManager:
         subjects_data, camera_data = self._convert_to_blender_format()
         print(f"passing {subjects_data = } to render_cv_view in SceneManager") 
         
-        # Render CV view only
-        cv_img = self.render_cv_view(subjects_data, camera_data)
+        # Acquire a Blender worker, render, then release
+        render_client = blender_pool.acquire()
+        cv_img = self.render_cv_view(subjects_data, camera_data, render_client)
+        blender_pool.release(render_client)
         
         return cv_img
     
 # --- Gradio Interface Logic ---
-scene_manager = SceneManager()
+# NOTE: No global scene_manager — each user gets their own via gr.State(SceneManager)
 
-def get_cuboid_list_html():
+def get_cuboid_list_html(scene_manager=None):
     """Generate HTML for the cuboid list with position-based colors"""
-    if not scene_manager.objects:
+    if scene_manager is None or not scene_manager.objects:
         return "<div style='text-align: center; padding: 20px; color: #888;'>No cuboids yet. Add one to get started!</div>"
     
     html = "<div style='display: flex; flex-direction: column; gap: 8px;'>"
@@ -764,32 +810,29 @@ def get_cuboid_list_html():
     return html
 
 
-def make_radio_choices():
+def make_radio_choices(scene_manager):
     """Generate unique radio button labels for all cuboids."""
     return [f"[{i}] {obj['description']}" for i, obj in enumerate(scene_manager.objects)]
 
 
-def find_obj_by_radio(selected_name):
+def find_obj_by_radio(selected_name, scene_manager):
     """Extract cuboid index from radio label. Returns (obj_id, obj) or (None, None)."""
     if not selected_name or not selected_name.startswith("["):
         return None, None
-    try:
-        idx = int(selected_name[1:selected_name.index("]")])
-        if 0 <= idx < len(scene_manager.objects):
-            return idx, scene_manager.objects[idx]
-    except (ValueError, IndexError):
-        pass
+    idx = int(selected_name[1:selected_name.index("]")])
+    if 0 <= idx < len(scene_manager.objects):
+        return idx, scene_manager.objects[idx]
     return None, None
 
 
-def make_radio_value(obj_id):
+def make_radio_value(obj_id, scene_manager):
     """Generate radio label for a specific cuboid by index."""
     if 0 <= obj_id < len(scene_manager.objects):
         return f"[{obj_id}] {scene_manager.objects[obj_id]['description']}"
     return None
 
 
-def add_cuboid_event(description_input, asset_type, camera_elevation, camera_lens):
+def add_cuboid_event(description_input, asset_type, camera_elevation, camera_lens, scene_manager):
     """Add a new cuboid"""
     if not description_input.strip():
         description_input = "New Cuboid"
@@ -798,7 +841,7 @@ def add_cuboid_event(description_input, asset_type, camera_elevation, camera_len
     cv_img = scene_manager.render_scene()
     
     # Create choices for radio buttons
-    choices = make_radio_choices()
+    choices = make_radio_choices(scene_manager)
     
     # Get the new object data
     new_obj = scene_manager.objects[new_id]
@@ -807,8 +850,8 @@ def add_cuboid_event(description_input, asset_type, camera_elevation, camera_len
         gr.update(value=""),  # Clear description input
         gr.update(value="Custom"),  # Reset type dropdown to Custom
         cv_img,
-        get_cuboid_list_html(),
-        gr.update(choices=choices, value=make_radio_value(new_id)),  # Radio with new selection
+        get_cuboid_list_html(scene_manager),
+        gr.update(choices=choices, value=make_radio_value(new_id, scene_manager)),  # Radio with new selection
         gr.update(visible=True),  # Show editor
         gr.update(value=new_obj['description']),  # Set description in editor
         gr.update(value=round(new_obj['position'][0], 2)),
@@ -818,20 +861,21 @@ def add_cuboid_event(description_input, asset_type, camera_elevation, camera_len
         gr.update(value=round(new_obj['size'][0], 2)),
         gr.update(value=round(new_obj['size'][1], 2)),
         gr.update(value=round(new_obj['size'][2], 2)),
-        gr.update(value=1.0)  # Reset scale to 1.0
+        gr.update(value=1.0),  # Reset scale to 1.0
+        scene_manager
     )
 
 
-def select_cuboid_event(selected_name):
+def select_cuboid_event(selected_name, scene_manager):
     """When a cuboid is selected from radio buttons"""
     if not selected_name:
-        return [gr.update(visible=False)] + [gr.update() for _ in range(9)]  # Changed from 8 to 9
+        return [gr.update(visible=False)] + [gr.update() for _ in range(9)] + [scene_manager]
     
     # Find the cuboid by radio label
-    _, obj = find_obj_by_radio(selected_name)
+    _, obj = find_obj_by_radio(selected_name, scene_manager)
     
     if obj is None:
-        return [gr.update(visible=False)] + [gr.update() for _ in range(9)]
+        return [gr.update(visible=False)] + [gr.update() for _ in range(9)] + [scene_manager]
     
     return (
         gr.update(visible=True),  # Show editor
@@ -843,17 +887,18 @@ def select_cuboid_event(selected_name):
         gr.update(value=round(obj['size'][0], 2)),
         gr.update(value=round(obj['size'][1], 2)),
         gr.update(value=round(obj['size'][2], 2)),
-        gr.update(value=1.0)  # Reset scale to 1.0
+        gr.update(value=1.0),  # Reset scale to 1.0
+        scene_manager
     )
 
 
-def delete_selected_cuboid(selected_name, camera_elevation, camera_lens):
+def delete_selected_cuboid(selected_name, camera_elevation, camera_lens, scene_manager):
     """Delete the currently selected cuboid"""
     if not selected_name:
-        return gr.update(), get_cuboid_list_html(), gr.update(), gr.update(visible=False)
+        return gr.update(), get_cuboid_list_html(scene_manager), gr.update(), gr.update(visible=False), scene_manager
     
     # Find and delete the cuboid
-    obj_id, _ = find_obj_by_radio(selected_name)
+    obj_id, _ = find_obj_by_radio(selected_name, scene_manager)
     
     if obj_id is not None:
         scene_manager.delete_cuboid(obj_id)
@@ -861,24 +906,30 @@ def delete_selected_cuboid(selected_name, camera_elevation, camera_lens):
     cv_img = scene_manager.render_scene()
     
     # Update choices
-    choices = make_radio_choices()
+    choices = make_radio_choices(scene_manager)
     
     return (
         cv_img,
-        get_cuboid_list_html(),
+        get_cuboid_list_html(scene_manager),
         gr.update(choices=choices, value=None),
-        gr.update(visible=False)
+        gr.update(visible=False),
+        scene_manager
     )
 
 
-def update_cuboid_event(selected_name, camera_elevation, camera_lens, description, x, y, z, azimuth, width, depth, height, scale):
+def update_cuboid_event(selected_name, camera_elevation, camera_lens, description, x, y, z, azimuth, width, depth, height, scale, scene_manager):
     """Update the selected cuboid including description and scale"""
     scene_manager.set_camera_elevation(camera_elevation)
     scene_manager.set_camera_lens(camera_lens)
     
+    obj_id = None
+    scaled_width = width
+    scaled_depth = depth
+    scaled_height = height
+    
     if selected_name:
         # Find the cuboid by radio label
-        obj_id, _ = find_obj_by_radio(selected_name)
+        obj_id, _ = find_obj_by_radio(selected_name, scene_manager)
         
         if obj_id is not None:
             # Update description first if changed
@@ -892,53 +943,46 @@ def update_cuboid_event(selected_name, camera_elevation, camera_lens, descriptio
             
             # Update other properties with scaled dimensions
             scene_manager.update_cuboid(obj_id, x, y, z, azimuth, scaled_width, scaled_depth, scaled_height)
-            
-            # Get updated object for return
-            updated_obj = scene_manager.objects[obj_id]
-            new_name = updated_obj['description']
     
     cv_img = scene_manager.render_scene()
     
     # Update choices with new descriptions
-    choices = make_radio_choices()
+    choices = make_radio_choices(scene_manager)
     
     # Return updated HTML, image, radio choices, new selection, updated sliders, and reset scale
     return (
-        get_cuboid_list_html(), 
+        get_cuboid_list_html(scene_manager), 
         cv_img,
-        gr.update(choices=choices, value=make_radio_value(obj_id) if obj_id is not None else None),
-        gr.update(value=round(scaled_width, 2) if obj_id is not None else round(width, 2)),   # Update width slider
-        gr.update(value=round(scaled_depth, 2) if obj_id is not None else round(depth, 2)),   # Update depth slider
-        gr.update(value=round(scaled_height, 2) if obj_id is not None else round(height, 2)), # Update height slider
-        gr.update(value=1.0)  # Reset scale to 1.0
+        gr.update(choices=choices, value=make_radio_value(obj_id, scene_manager) if obj_id is not None else None),
+        gr.update(value=round(scaled_width, 2) if obj_id is not None else round(width, 2)),
+        gr.update(value=round(scaled_depth, 2) if obj_id is not None else round(depth, 2)),
+        gr.update(value=round(scaled_height, 2) if obj_id is not None else round(height, 2)),
+        gr.update(value=1.0),  # Reset scale to 1.0
+        scene_manager
     )
 
 
-def camera_change_event(camera_elevation, camera_lens):
+def camera_change_event(camera_elevation, camera_lens, scene_manager):
     """Handle camera control changes"""
     scene_manager.set_camera_elevation(camera_elevation)
     scene_manager.set_camera_lens(camera_lens)
     cv_img = scene_manager.render_scene()
-    return cv_img
+    return cv_img, scene_manager
 
 
-def surrounding_prompt_change_event(prompt_text):  # Add this function
+def surrounding_prompt_change_event(prompt_text, scene_manager):
     """Handle surrounding prompt changes"""
     scene_manager.set_surrounding_prompt(prompt_text)
-    return None  # No visual update needed
+    return scene_manager
 
 
-def render_segmask_event(camera_elevation, camera_lens, surrounding_prompt):
+def render_segmask_event(camera_elevation, camera_lens, surrounding_prompt, scene_manager):
     """Render segmentation masks for all objects"""
     if not scene_manager.objects:
-        return "⚠️ No objects to render", gr.update(visible=False), []
+        return "⚠️ No objects to render", gr.update(visible=False), [], scene_manager
     
     # Get subject descriptions
     subject_descriptions = [obj['description'] for obj in scene_manager.objects]
-    
-    # Now you have access to:
-    # - surrounding_prompt: the text from surrounding_prompt_input
-    # - subject_descriptions: list of all subject descriptions
     
     print(f"Surrounding prompt: {surrounding_prompt}")
     print(f"Subject descriptions: {subject_descriptions}")
@@ -972,16 +1016,18 @@ def render_segmask_event(camera_elevation, camera_lens, surrounding_prompt):
     # Convert to server expected format
     subjects_data, camera_data = scene_manager._convert_to_blender_format()
     
-    # You can add the prompt and descriptions to the request if needed
-    # For example, add to subjects_data or camera_data before sending
+    # Acquire a Blender worker for rendering
+    render_client = blender_pool.acquire()
     
     # Render segmentation masks
-    success, segmask_images, error_msg = scene_manager.render_client.render_segmasks(subjects_data, camera_data)
+    success, segmask_images, error_msg = render_client.render_segmasks(subjects_data, camera_data)
 
-    # copy all the data to the correct location  
-    root_save_dir = config.GRADIO_FILES_DIR 
+    blender_pool.release(render_client)
+
+    # copy all the data to the per-session directory  
+    root_save_dir = scene_manager.session_files_dir 
     os.makedirs(root_save_dir, exist_ok=True)
-    os.system(f"rm {root_save_dir}/*") 
+    os.system(f"rm -f {root_save_dir}/*") 
     shutil.move("cv_render.jpg", osp.join(root_save_dir, "cv_render.jpg")) 
     for subject_idx in range(len(subject_descriptions)): 
         shutil.move(f"{str(subject_idx).zfill(3)}_segmask_cv.png", osp.join(root_save_dir, f"main__segmask_{str(subject_idx).zfill(3)}__{1.00}.png")) 
@@ -1003,17 +1049,19 @@ def render_segmask_event(camera_elevation, camera_lens, surrounding_prompt):
         return (
             f"✅ Successfully rendered {len(segmask_images)} segmentation masks",
             gr.update(visible=True),
-            segmask_images
+            segmask_images,
+            scene_manager
         )
     else:
         return (
             f"❌ Failed to render segmentation masks: {error_msg}",
             gr.update(visible=False),
-            []
+            [],
+            scene_manager
         )
 
 
-def harmonize_event(selected_name, camera_elevation, camera_lens):
+def harmonize_event(selected_name, camera_elevation, camera_lens, scene_manager):
     """Harmonize all object scales and update the scene"""
     message = scene_manager.harmonize_scales()
     print(message)
@@ -1022,46 +1070,48 @@ def harmonize_event(selected_name, camera_elevation, camera_lens):
     
     # If a cuboid is selected, update its sliders
     if selected_name:
-        _, obj = find_obj_by_radio(selected_name)
+        _, obj = find_obj_by_radio(selected_name, scene_manager)
         
         if obj is not None:
             return (
                 cv_img,
-                get_cuboid_list_html(),
+                get_cuboid_list_html(scene_manager),
                 gr.update(value=round(obj['position'][0], 2)),
                 gr.update(value=round(obj['position'][1], 2)),
                 gr.update(value=round(obj['position'][2], 2)),
                 gr.update(value=obj['azimuth']),
                 gr.update(value=round(obj['size'][0], 2)),
                 gr.update(value=round(obj['size'][1], 2)),
-                gr.update(value=round(obj['size'][2], 2))
+                gr.update(value=round(obj['size'][2], 2)),
+                scene_manager
             )
     
     # No object selected or object not found
     return (
         cv_img,
-        get_cuboid_list_html(),
+        get_cuboid_list_html(scene_manager),
         gr.update(),
         gr.update(),
         gr.update(),
         gr.update(),
         gr.update(),
         gr.update(),
-        gr.update()
+        gr.update(),
+        scene_manager
     )
 
 
-def save_scene_event():
+def save_scene_event(scene_manager):
     """Save the current scene to a pkl file"""
     success, filepath, error = scene_manager.save_scene_to_pkl()
     
     if success:
-        return f"✅ Scene saved successfully to: {filepath}\n📋 Saved parameters: {scene_manager.inference_params}"
+        return f"✅ Scene saved successfully to: {filepath}\n📋 Saved parameters: {scene_manager.inference_params}", scene_manager
     else:
-        return f"❌ Failed to save scene: {error}"
+        return f"❌ Failed to save scene: {error}", scene_manager
 
 
-def load_scene_event(filepath):
+def load_scene_event(filepath, scene_manager):
     """Load a scene from a pkl file and restore all parameters"""
     if not filepath.strip():
         return (
@@ -1077,7 +1127,8 @@ def load_scene_event(filepath):
             gr.update(),  # image_size
             gr.update(),  # seed
             gr.update(),  # guidance
-            gr.update()   # steps
+            gr.update(),  # steps
+            scene_manager
         )
     
     success, num_objects, error = scene_manager.load_scene_from_pkl(filepath)
@@ -1087,14 +1138,14 @@ def load_scene_event(filepath):
         cv_img = scene_manager.render_scene()
         
         # Update UI components
-        choices = make_radio_choices()
+        choices = make_radio_choices(scene_manager)
         
         params_msg = f"✅ Scene loaded: {num_objects} objects\n📋 Restored parameters: {scene_manager.inference_params}"
         
         return (
             params_msg,
             cv_img,
-            get_cuboid_list_html(),
+            get_cuboid_list_html(scene_manager),
             gr.update(choices=choices, value=None),
             gr.update(visible=False),
             gr.update(value=scene_manager.camera_elevation),
@@ -1104,7 +1155,8 @@ def load_scene_event(filepath):
             gr.update(value=scene_manager.inference_params['height']),
             gr.update(value=scene_manager.inference_params['seed']),
             gr.update(value=scene_manager.inference_params['guidance_scale']),
-            gr.update(value=scene_manager.inference_params['num_inference_steps'])
+            gr.update(value=scene_manager.inference_params['num_inference_steps']),
+            scene_manager
         )
     else:
         return (
@@ -1120,7 +1172,8 @@ def load_scene_event(filepath):
             gr.update(),
             gr.update(),
             gr.update(),
-            gr.update()
+            gr.update(),
+            scene_manager
         )
 
 
@@ -1488,7 +1541,7 @@ with gr.Blocks(
                     gr.Markdown("## ➕ Add New Object")
                     add_cuboid_description_input = gr.Textbox(placeholder="Enter cuboid description", label="Description")
                     asset_type_dropdown = gr.Dropdown(
-                        choices=scene_manager.get_asset_type_choices(),
+                        choices=SceneManager().get_asset_type_choices(),
                         value="Custom",
                         label="Type",
                         info="Select asset type to load dimensions, or choose Custom"
@@ -1526,16 +1579,13 @@ with gr.Blocks(
                         label="Inference Steps"
                     )
     
+    # Session state: each user gets their own SceneManager via gr.State
+    session_state = gr.State(SceneManager)
+
     # Event Handlers
-    def add_cuboid_with_auto_update(description_input, asset_type, camera_elevation, camera_lens):
-        """Add cuboid and auto-update scene"""
-        result = add_cuboid_event(description_input, asset_type, camera_elevation, camera_lens)
-        return result
-    
-    # Update add_cuboid_btn.click event handler (around line 850):
     add_cuboid_btn.click(
-        add_cuboid_with_auto_update,
-        inputs=[add_cuboid_description_input, asset_type_dropdown, camera_elevation_slider, camera_lens_slider],
+        add_cuboid_event,
+        inputs=[add_cuboid_description_input, asset_type_dropdown, camera_elevation_slider, camera_lens_slider, session_state],
         outputs=[
             add_cuboid_description_input,
             asset_type_dropdown,
@@ -1547,40 +1597,41 @@ with gr.Blocks(
             edit_x, edit_y, edit_z,
             edit_azimuth,
             edit_width, edit_depth, edit_height,
-            edit_scale  # Add this
+            edit_scale,
+            session_state
         ]
     )
     
-    # Update the cuboid_radio.change event handler (around line 860):
     cuboid_radio.change(
         select_cuboid_event,
-        inputs=[cuboid_radio],
+        inputs=[cuboid_radio, session_state],
         outputs=[
             editor_section,
             edit_description,
             edit_x, edit_y, edit_z,
             edit_azimuth,
             edit_width, edit_depth, edit_height,
-            edit_scale  # Add this
+            edit_scale,
+            session_state
         ]
     )
     
     delete_btn.click(
         delete_selected_cuboid,
-        inputs=[cuboid_radio, camera_elevation_slider, camera_lens_slider],
-        outputs=[cv_image_output, cuboid_list_html, cuboid_radio, editor_section]
+        inputs=[cuboid_radio, camera_elevation_slider, camera_lens_slider, session_state],
+        outputs=[cv_image_output, cuboid_list_html, cuboid_radio, editor_section, session_state]
     )
 
     # Save/Load handlers
     save_scene_btn.click(
         save_scene_event,
-        inputs=[],
-        outputs=[save_load_status]
+        inputs=[session_state],
+        outputs=[save_load_status, session_state]
     )
     
     load_scene_btn.click(
         load_scene_event,
-        inputs=[load_path_input],
+        inputs=[load_path_input, session_state],
         outputs=[
             save_load_status,
             cv_image_output,
@@ -1594,18 +1645,19 @@ with gr.Blocks(
             inference_image_size,
             inference_seed,
             inference_guidance,
-            inference_steps
+            inference_steps,
+            session_state
         ]
     )
     
-    def load_from_gallery(state, evt: gr.SelectData):
+    def load_from_gallery(state, scene_manager, evt: gr.SelectData):
         pkl_name = state[evt.index]
-        return load_scene_event(pkl_name)
+        return load_scene_event(pkl_name, scene_manager)
 
     if 'example_gallery' in locals():
         example_gallery.select(
             load_from_gallery,
-            inputs=[example_gallery_state],
+            inputs=[example_gallery_state, session_state],
             outputs=[
                 save_load_status,
                 cv_image_output,
@@ -1619,25 +1671,11 @@ with gr.Blocks(
                 inference_image_size,
                 inference_seed,
                 inference_guidance,
-                inference_steps
+                inference_steps,
+                session_state
             ]
         )
     
-    # Auto-update scene when sliders change
-    # for slider in [edit_x, edit_y, edit_z, edit_azimuth, edit_width, edit_depth, edit_height]:
-    #     slider.change(
-    #         update_cuboid_event,
-    #         inputs=[
-    #             cuboid_radio,
-    #             camera_elevation_slider,
-    #             camera_lens_slider,
-    #             edit_x, edit_y, edit_z,
-    #             edit_azimuth,
-    #             edit_width, edit_depth, edit_height
-    #         ],
-    #         outputs=[cuboid_list_html, cv_image_output]
-    #     )
-    # Update the update_scene_btn.click event handler (around line 920):
     update_scene_btn.click(
         update_cuboid_event,
         inputs=[
@@ -1648,21 +1686,23 @@ with gr.Blocks(
             edit_x, edit_y, edit_z,
             edit_azimuth,
             edit_width, edit_depth, edit_height,
-            edit_scale  # Add this
+            edit_scale,
+            session_state
         ],
         outputs=[
             cuboid_list_html, 
             cv_image_output, 
             cuboid_radio,
-            edit_width,   # Add this
-            edit_depth,   # Add this
-            edit_height,  # Add this
-            edit_scale    # Add this (to reset to 1.0)
+            edit_width,
+            edit_depth,
+            edit_height,
+            edit_scale,
+            session_state
         ]
     )
 
 
-    # Update generate button click handler
+    # Generate button click handler
     generate_btn.click(
         generate_image_event,
         inputs=[
@@ -1673,21 +1713,23 @@ with gr.Blocks(
             inference_image_size,
             inference_seed,
             inference_guidance,
-            inference_steps
+            inference_steps,
+            session_state
         ],
-        outputs=[save_load_status, cv_image_output, generated_image_output]
+        outputs=[save_load_status, cv_image_output, generated_image_output, session_state]
     )
 
     
     harmonize_btn.click(
         harmonize_event,
-        inputs=[cuboid_radio, camera_elevation_slider, camera_lens_slider],
+        inputs=[cuboid_radio, camera_elevation_slider, camera_lens_slider, session_state],
         outputs=[
             cv_image_output,
             cuboid_list_html,
             edit_x, edit_y, edit_z,
             edit_azimuth,
-            edit_width, edit_depth, edit_height
+            edit_width, edit_depth, edit_height,
+            session_state
         ]
     )
     
@@ -1695,40 +1737,55 @@ with gr.Blocks(
     for control in [camera_elevation_slider, camera_lens_slider]:
         control.change(
             camera_change_event,
-            inputs=[camera_elevation_slider, camera_lens_slider],
-            outputs=[cv_image_output]
+            inputs=[camera_elevation_slider, camera_lens_slider, session_state],
+            outputs=[cv_image_output, session_state]
         )
 
     # Surrounding prompt control
     surrounding_prompt_input.change(
         surrounding_prompt_change_event,
-        inputs=[surrounding_prompt_input],
-        outputs=[]
+        inputs=[surrounding_prompt_input, session_state],
+        outputs=[session_state]
     )
 
 
     # Initial render
-    def initial_render():
+    def initial_render(scene_manager):
         cv_img = scene_manager.render_scene()
         gen_img = Image.new('RGB', (512, 512), color='white')
-        return cv_img, gen_img
+        return cv_img, gen_img, scene_manager
     
     demo.load(
         initial_render, 
-        outputs=[cv_image_output, generated_image_output]
+        inputs=[session_state],
+        outputs=[cv_image_output, generated_image_output, session_state]
     )
 
 
 if __name__ == "__main__":
     import os 
-    from urllib.parse import urlparse
-    import config
+    import time as _time
     
-    cv_port = urlparse(config.BLENDER_CV_SERVER_URL).port
-    final_port = urlparse(config.BLENDER_FINAL_SERVER_URL).port
-    seg_port = urlparse(config.BLENDER_SEGMASK_SERVER_URL).port
+    # Launch multiple Blender backend workers
+    for worker_idx in range(config.NUM_BLENDER_WORKERS):
+        cv_port, final_port, segmask_port = config.get_blender_ports(worker_idx)
+        cmd = f"./launch_blender_backend.sh {cv_port} {final_port} {segmask_port} {segmask_port + 1} &"
+        print(f"Launching Blender worker {worker_idx}: ports {cv_port}/{final_port}/{segmask_port}")
+        os.system(cmd)
     
-    os.system(f"./launch_blender_backend.sh {cv_port} {final_port} {seg_port} 5004 &")
-    # Initialize inference engine (load model once at startup)
+    # Populate the global Blender worker pool
+    for worker_idx in range(config.NUM_BLENDER_WORKERS):
+        cv_url, final_url, segmask_url = config.get_blender_urls(worker_idx)
+        client = BlenderRenderClient(
+            cv_server_url=cv_url,
+            final_server_url=final_url,
+            segmask_server_url=segmask_url
+        )
+        blender_pool.add_worker(client)
+        print(f"Added Blender worker {worker_idx} to pool: {cv_url}, {final_url}, {segmask_url}")
+    
+    # Initialize inference engine (load model once at startup — shared across all sessions)
     initialize_inference_engine(base_model_path=config.PRETRAINED_MODEL_NAME_OR_PATH)
-    demo.launch(share=True)
+    
+    # Enable Gradio queuing so multiple users see "In queue..." and launch
+    demo.queue().launch(share=True)
