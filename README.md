@@ -49,7 +49,6 @@ Inference of this model requires ~38 GB VRAM on the GPU. Note that the inference
 
 We use [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) as the base model. To download the SeeThrough3D LoRA checkpoint,
 ```bash
-cd checkpoints/seethrough3d_release/ 
 conda activate st3d 
 python3 download_checkpoint.py 
 ``` 
