@@ -22,7 +22,7 @@ if not os.path.exists(LORA_WEIGHTS_ROOT):
 
 # Available Checkpoint weights (dropdown options)
 CHECKPOINT_NAMES = [
-    "seethrough3d_release/seethrough3d_release"
+    "seethrough3d_release"
 ]
 
 # ── Blender Backend Server URLs ───────────────────────────────────────────────
