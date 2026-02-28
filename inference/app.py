@@ -1508,7 +1508,7 @@ with gr.Blocks(
                     gr.Markdown("### Inference Parameters")
                     
                     inference_image_size = gr.Slider(
-                        minimum=256, maximum=1024, value=512, step=64,
+                        minimum=256, maximum=1024, value=1024, step=64,
                         label="Image Size"
                     )
                     

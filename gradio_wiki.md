@@ -1,5 +1,9 @@
 # SeeThrough3D Gradio Demo Guide
 
+<div align="center">
+  <img src="assets/gradio_demo.png" width="100%">
+</div>
+
 This guide provides an overview of the SeeThrough3D Gradio interface and instructions on how to use its various features for occlusion-aware 3D control in text-to-image generation.
 
 ## Interface Overview
