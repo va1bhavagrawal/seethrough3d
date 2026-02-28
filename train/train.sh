@@ -1,7 +1,7 @@
 export MODEL_DIR="black-forest-labs/FLUX.1-dev" # your flux path
-export OUTPUT_DIR="/archive/vaibhav.agrawal/a-bev-of-the-latents/checkpoints"  # your save path
+export OUTPUT_DIR="../checkpoints"  # your save path
 export CONFIG="./default_config.yaml"
-export TRAIN_DATA="/archive/vaibhav.agrawal/a-bev-of-the-latents/seethrough3d_data/train.jsonl" # your data jsonl file 
+export TRAIN_DATA="../dataset/seethrough3d_data/train.jsonl" # your data jsonl file 
 export LOG_PATH="$OUTPUT_DIR/log"
 
 accelerate launch --config_file $CONFIG train.py \

@@ -16,10 +16,9 @@ SAVED_SCENES_DIR = os.path.join(BASE_DIR, "saved_scenes")
 PRETRAINED_MODEL_NAME_OR_PATH = "black-forest-labs/FLUX.1-dev"
 
 # The root directory where LoRA fine-tunes are stored
-LORA_WEIGHTS_ROOT = "/archive/vaibhav.agrawal/a-bev-of-the-latents/easycontrol_cuboids"
-
-# The directory containing cached inference embeddings (if used)
-INFERENCE_EMBEDS_DIR = "/archive/vaibhav.agrawal/a-bev-of-the-latents/inference_embeds_flux2"
+LORA_WEIGHTS_ROOT = os.path.join(os.path.dirname(BASE_DIR), "checkpoints") 
+if not os.path.exists(LORA_WEIGHTS_ROOT):
+    raise FileNotFoundError(f"LoRA weights root directory not found: {LORA_WEIGHTS_ROOT}") 
 
 # Available Checkpoint weights (dropdown options)
 CHECKPOINT_NAMES = [

@@ -20,7 +20,7 @@ tags:                            # Add extra tags which would make the repo sear
 
 
 <div align="center">
-  <img src="assets/teaser_camera_ready.svg" width="50%">
+  <img src="assets/teaser_camera_ready.png" width="50%">
 </div>
 
 ## 🚀 Getting Started 
@@ -43,7 +43,7 @@ pip install -e .
 
 Inference of this model requires ~38 GB VRAM on the GPU. Note that the inference runs Blender in EEVEE mode, which runs faster on workstation GPUs like the NVIDIA RTX A6000, compared to data center GPUs like the NVIDIA H100.  
 
-### 🌐 Downloading Pre-Crained checkpoint 
+### 🌐 Download the Pre-Trained Checkpoint 
 
 We use [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) as the base model. To download the SeeThrough3D LoRA checkpoint,
 ```bash
@@ -56,7 +56,7 @@ cd checkpoints
 ### 🤗 Gradio Interface 
 
 It is best to perform inference using the 🤗 Gradio interface, which makes it easy to specify 3D layouts. To launch the interface, run
-```
+```bash
 cd inference 
 conda activate st3d 
 python3 app.py 
@@ -79,14 +79,20 @@ The inference notebook is located at `infer.ipynb`. It is able to load a scene s
 
 ## 🏋 Training  
 
-### 🌐 Downloading the Dataset
+### 🌐 Download the Dataset
+By default, the data is downloaded in the `dataset` directory. To change the download location, edit the `LOCAL_DIR` variable in `dataset/download.py`.  
 
 ```bash
 cd dataset 
-
+conda activate st3d 
+./setup_data.sh 
 ```
 
+We are working on making the data compatible with 🤗 datasets library for ease of visualization and streaming, see [`va1bhavagrawa1/seethrough3d-data`](https://huggingface.co/datasets/va1bhavagrawa1/seethrough3d-data/tree/main) 
+
 ### 🏃 Run Training
+
+Edit `train/train.sh` to specify the downloaded dataset path. 
 
 We train the model for a single epoch at resolution 512, effective batch size of 2 (~25K steps). This requires 2x 80 GB GPUs (one image per GPU). 
 ```bash
