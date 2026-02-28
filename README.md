@@ -16,6 +16,7 @@ tags:                            # Add extra tags which would make the repo sear
 
 [![arXiv](https://img.shields.io/badge/arXiv-2602.23359-b31b1b.svg)](https://arxiv.org/abs/2602.23359)
 [![Project Page](https://img.shields.io/badge/Project-Page-blue.svg)](https://seethrough3d.github.io)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Dataset-yellow)](https://huggingface.co/datasets/va1bhavagrawa1/seethrough3d-data/tree/main)
 
 
 <div align="center">
@@ -42,7 +43,7 @@ pip install -e .
 
 Inference of this model requires ~38 GB VRAM on the GPU. Note that the inference runs Blender in EEVEE mode, which runs faster on workstation GPUs like the NVIDIA RTX A6000, compared to data center GPUs like the NVIDIA H100.  
 
-### 🌐 Downloading pre-trained checkpoint 
+### 🌐 Downloading Pre-Crained checkpoint 
 
 We use [FLUX.1-dev](https://huggingface.co/black-forest-labs/FLUX.1-dev) as the base model. To download the SeeThrough3D LoRA checkpoint,
 ```bash
@@ -111,7 +112,7 @@ Now, set the flag `--inference_embeds_dir` in `train/train.sh` to the location o
 
 > **Note:** The VRAM requirements can be further reduced using training time optimizations such as gradient checkpointing. We plan to implement this in the future. We are also welcome to any PRs regarding this.  
 
-## Citation
+## 🏅 Citation
 
 If you find this work useful please cite:
 
