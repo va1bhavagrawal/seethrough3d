@@ -1,0 +1,47 @@
+[33mcommit efd1e39b7546aedb9fd3faec0fcfae4384081fc0[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: Vaibhav Agrawal <agrvaibhav19@gmail.com>
+Date:   Sat Feb 28 02:19:55 2026 +0530
+
+    updated README.md
+
+[33mcommit 081e679789d534b24eedac26674f48adffe97e2b[m
+Author: Vaibhav Agrawal <agrvaibhav19@gmail.com>
+Date:   Sat Feb 28 02:06:30 2026 +0530
+
+    added README.md
+
+[33mcommit 50ef48e8dc14ba601bf23503f2e5a6d98494b93a[m
+Author: Vaibhav Agrawal <agrvaibhav19@gmail.com>
+Date:   Fri Feb 27 19:14:31 2026 +0000
+
+    removed extra files
+
+[33mcommit 19b462e3ea40a189e5dc5434efb5c5e604751d8d[m
+Author: Vaibhav Agrawal <agrvaibhav19@gmail.com>
+Date:   Fri Feb 27 19:07:50 2026 +0000
+
+    updated requirements.txt
+
+[33mcommit a0a2ea72e43c39a9be580ae0a8bcf50de50f58e4[m
+Author: Vaibhav Agrawal <agrvaibhav19@gmail.com>
+Date:   Fri Feb 27 05:47:18 2026 +0000
+
+    working demo, organized files
+
+[33mcommit 65dcd5d7d9de656498ad35d879375e3b765b2de7[m
+Author: Vaibhav Agrawal <agrvaibhav19@gmail.com>
+Date:   Thu Feb 26 15:40:00 2026 +0530
+
+    made some corrections
+
+[33mcommit 46becf5d86b03acd627b5205795f3ab8cf973969[m
+Author: Vaibhav Agrawal <agrvaibhav19@gmail.com>
+Date:   Thu Feb 26 15:26:33 2026 +0530
+
+    working training code with both the stages
+
+[33mcommit 42f4dbb228f3f9344ba0c686def47fabae5d9047[m
+Author: Vaibhav Agrawal <agrvaibhav19@gmail.com>
+Date:   Mon Feb 23 06:46:49 2026 +0000
+
+    first commit

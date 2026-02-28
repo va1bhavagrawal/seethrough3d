@@ -15,13 +15,14 @@ tags:                            # Add extra tags which would make the repo sear
 --- -->
 
 [![arXiv](https://img.shields.io/badge/arXiv-2602.23359-b31b1b.svg)](https://arxiv.org/abs/2602.23359)
+[![Project Page](https://img.shields.io/badge/Project-Page-blue.svg)](https://seethrough3d.github.io)
 
 
 <div align="center">
   <img src="assets/teaser_camera_ready.svg" width="50%">
 </div>
 
-## 🚀 Getting started 
+## 🚀 Getting Started 
 
 We recommend creating a `conda` environment named `st3d` with Python 3.11:
 
@@ -30,13 +31,16 @@ conda create -n st3d python=3.11
 conda activate st3d
 ```
 
-Install the dependencies using the provided `requirements.txt`:
+Install the dependencies using the provided `requirements.txt`, then install the project itself in editable mode:
 
 ```bash
 pip install -r requirements.txt
+pip install -e .
 ```
 
 ## 🎨 Inference 
+
+Inference of this model requires ~38 GB VRAM on the GPU. Note that the inference runs Blender in EEVEE mode, which runs faster on workstation GPUs like the NVIDIA RTX A6000, compared to data center GPUs like the NVIDIA H100.  
 
 ### 🌐 Downloading pre-trained checkpoint 
 
@@ -100,3 +104,19 @@ conda activate st3d
 Now, set the flag `--inference_embeds_dir` in `train/train.sh` to the location of the cached text embeddings.
 
 > **Note:** The VRAM requirements can be further reduced using training time optimizations such as gradient checkpointing. We plan to implement this in the future. We are also welcome to any PRs regarding this.  
+
+## Citation
+
+If you find this work useful please cite:
+
+```bibtex
+@misc{agrawal2026seethrough3docclusionaware3d,
+      title={SeeThrough3D: Occlusion Aware 3D Control in Text-to-Image Generation}, 
+      author={Vaibhav Agrawal and Rishubh Parihar and Pradhaan Bhat and Ravi Kiran Sarvadevabhatla and R. Venkatesh Babu},
+      year={2026},
+      eprint={2602.23359},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2602.23359}, 
+}
+```

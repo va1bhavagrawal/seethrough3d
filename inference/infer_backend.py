@@ -6,8 +6,6 @@ import numpy as np
 from typing import Optional, List, Tuple
 from transformers import CLIPTokenizer, T5TokenizerFast
 
-import sys 
-sys.path.append(os.path.join(os.getcwd(), "..")) 
 from train.src.pipeline import FluxPipeline
 from train.src.transformer_flux import FluxTransformer2DModel
 from train.src.lora_helper import set_single_lora, set_multi_lora, unset_lora

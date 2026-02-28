@@ -1,0 +1,1 @@
+accelerate launch --config_file ./default_config.yaml cache.py 
